@@ -12,3 +12,5 @@ __pycache__/
 .DS_Store
 # Retired workflow artifacts may contain private organization data and plans.
 .export/
+.terraform-version
+.terraform.lock.hcl
