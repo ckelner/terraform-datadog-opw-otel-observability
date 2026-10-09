@@ -1,0 +1,213 @@
+name: "OPW/OTel Runbook | OPW request admission is shedding or timing out"
+status: "published"
+time:
+  live_span: "1h"
+metadata:
+  is_template: false
+  take_snapshots: false
+  type: "runbook"
+template_variables:
+  - name: "pipeline_id"
+    prefix: "pipeline_id"
+    default: "*"
+  - name: "component_id"
+    prefix: "component_id"
+    default: "*"
+cells:
+  - definition:
+      type: "markdown"
+      text: |-
+        # Paging symptom: OPW request admission is shedding or timing out
+
+        [Find the OPW admission monitors](${app_url}/monitors/manage?q=tag%3A%22symptom%3Aadmission-rejection%22&p=1)${optional_monitor_admission_shed}
+
+        Open [Assessing impact](${notebook_assessing_impact_url}) first. Shed and timed-out requests are rejections, not discards, so whether anything was lost depends entirely on what the client did next.
+
+        ## What bounded request admission does
+
+        OPW 2.23.0 and later put an explicit bound on in-flight work at the source. Each Worker pod admits a fixed number of concurrent requests and gives each admitted request a fixed processing deadline. Anything beyond the bound is rejected immediately rather than queued indefinitely.
+
+        The defaults are 100 concurrent requests and a 30 second processing timeout, per pod.
+
+        The concurrency bound is shared across protocols. A pod running an OTLP source over both HTTP and gRPC gets 100 concurrent requests in total, not 100 on each. The `protocol` tag on the rejection counters tells you which transport the rejected requests arrived on; it does not mean each transport has its own budget.
+
+        Both values are overridable through environment variables on the Worker:
+
+        ```
+        DD_OP_SOURCE_OTEL_MAX_CONCURRENT_REQUESTS
+        DD_OP_SOURCE_OTEL_REQUEST_TIMEOUT_SECS
+        ```
+
+        Use these exact names. There is no `DD_OP_OTEL_` form of either variable, and a misspelled variable is silently ignored: the Worker starts cleanly and keeps the defaults.
+
+        ## What the client sees
+
+        A load-shed rejection returns HTTP 429. A processing timeout returns HTTP 503. Both are retryable, and an OTLP exporter with a standard retry policy will retry both. This is the behaviour you want. The alternative, which is what OPW did before bounded admission existed, was to accept the request, hold it indefinitely, and silently drop the data if the connection went away.
+
+        ## Step 1: Is admission saturated
+  - definition:
+      type: "timeseries"
+      title: "Request admission saturation (active / concurrency limit)"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+      requests:
+        - display_type: "line"
+          response_format: "timeseries"
+          formulas:
+            - alias: "saturation"
+              formula: "active / limit"
+          queries:
+            - data_source: "metrics"
+              name: "active"
+              query: "avg:pipelines.component_request_active{!component_id:_*,pipeline_id:$pipeline_id,component_id:$component_id} by {pipeline_id,component_id}"
+            - data_source: "metrics"
+              name: "limit"
+              query: "max:pipelines.component_request_concurrency_limit{!component_id:_*,pipeline_id:$pipeline_id,component_id:$component_id} by {pipeline_id,component_id}"
+          style:
+            palette: "dog_classic"
+            line_type: "solid"
+            line_width: "normal"
+      yaxis:
+        include_zero: true
+        min: "0"
+        scale: "linear"
+  - definition:
+      type: "markdown"
+      text: |-
+        ### Interpret saturation
+
+        `component_request_active` and `component_request_concurrency_limit` are gauges and carry no `protocol` tag, because the limit is shared across protocols.
+
+        The investigation monitor warns at 0.6 and alerts at 0.8. Saturation sitting near 1.0 means every admission slot is occupied and the next request in is a candidate for shedding.
+
+        High saturation with no shedding yet is the useful early signal. It means requests are being held longer than normal, which is almost always because the pipeline behind the source is slow, not because request arrival rate went up. Check the source buffer and the destination before assuming you need a higher limit.
+
+        ## Step 2: What is being rejected, and over which transport
+  - definition:
+      type: "timeseries"
+      title: "Load shed requests by protocol"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+        - "sum"
+      requests:
+        - display_type: "bars"
+          response_format: "timeseries"
+          formulas:
+            - alias: "load shed"
+              formula: "shed"
+          queries:
+            - data_source: "metrics"
+              name: "shed"
+              query: "sum:pipelines.component_load_shed_requests_total{!component_id:_*,pipeline_id:$pipeline_id,component_id:$component_id} by {protocol,component_id}.as_rate()"
+          style:
+            palette: "warm"
+            line_type: "solid"
+            line_width: "normal"
+  - definition:
+      type: "markdown"
+      text: ""
+  - definition:
+      type: "timeseries"
+      title: "Timed out requests by protocol"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+        - "sum"
+      requests:
+        - display_type: "bars"
+          response_format: "timeseries"
+          formulas:
+            - alias: "timed out"
+              formula: "timeouts"
+          queries:
+            - data_source: "metrics"
+              name: "timeouts"
+              query: "sum:pipelines.component_timed_out_requests_total{!component_id:_*,pipeline_id:$pipeline_id,component_id:$component_id} by {protocol,component_id}.as_rate()"
+          style:
+            palette: "orange"
+            line_type: "solid"
+            line_width: "normal"
+  - definition:
+      type: "markdown"
+      text: |-
+        ### Shedding versus timing out
+
+        These two counters describe different failures and lead to different fixes.
+
+        Load shedding means the request was never admitted. The pod was already at its concurrency limit when the request arrived. Either arrival rate exceeded what the fleet can admit, or requests already in flight are taking too long to complete and are holding slots.
+
+        Timing out means the request was admitted and then failed to finish inside the processing deadline. That is always a downstream problem: the pipeline could not accept the events fast enough. Raising the concurrency limit in this situation makes it worse, because more requests occupy slots for longer and the pod holds more memory while they wait.
+
+        If both counters are rising, treat the timeouts as the cause. Shedding usually follows timeouts, not the other way round.
+
+        ## Step 3: Cross-check with HTTP response codes
+  - definition:
+      type: "timeseries"
+      title: "HTTP responses sent by status"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+        - "sum"
+      requests:
+        - display_type: "bars"
+          response_format: "timeseries"
+          formulas:
+            - alias: "responses"
+              formula: "responses"
+          queries:
+            - data_source: "metrics"
+              name: "responses"
+              query: "sum:pipelines.http_server_responses_sent_total{!component_id:_*,pipeline_id:$pipeline_id,component_id:$component_id} by {status,component_id}.as_rate()"
+          style:
+            palette: "dog_classic"
+            line_type: "solid"
+            line_width: "normal"
+  - definition:
+      type: "markdown"
+      text: |-
+        ### Use this chart on any Worker version
+
+        `pipelines.http_server_responses_sent_total` is emitted by every supported OPW version, not just 2.23.0 and later. On a Worker older than 2.23.0 the admission counters above will be empty and this chart is the only way to see rejections: look for 429 and 503 in the `status` breakdown.
+
+        It is also the fastest sanity check on a current Worker. If the admission counters are rising but the status breakdown shows no 429 or 503, the rejections are arriving over gRPC rather than HTTP and this chart will not see them.
+
+        ## Mitigation
+
+        Work in this order.
+
+        1. Fix the downstream cause first if timeouts dominate. Open the backpressure triage runbook and walk the destination and OPW layers. Admission limits are not the problem when the pipeline behind them is blocked.
+        2. Scale the Worker fleet out if saturation is high, timeouts are low, and shedding tracks arrival rate. More pods means more admission slots, and OPW scales better as more pods with fewer cores each than as fewer pods with many cores.
+        3. Raise `DD_OP_SOURCE_OTEL_MAX_CONCURRENT_REQUESTS` only when the pipeline demonstrably keeps up and the bound alone is the constraint. Every additional in-flight request holds its payload in memory, so raise the Worker memory request alongside it.
+        4. Raise `DD_OP_SOURCE_OTEL_REQUEST_TIMEOUT_SECS` only if the normal, healthy processing time for a request is genuinely close to 30 seconds. A longer deadline on a blocked pipeline just converts fast rejections into slow ones.
+
+        ## The client timeout rule
+
+        The client-side exporter timeout must be larger than the Worker-side processing timeout. If the OTLP exporter gives up before `DD_OP_SOURCE_OTEL_REQUEST_TIMEOUT_SECS` elapses, the client cancels the request mid-flight, the Worker records an interrupted send, and you are back to the original silent-drop behaviour that bounded admission was introduced to eliminate. The Worker never gets to return a clean, retryable 503.
+
+        Check both ends whenever you change either one. A Collector exporter `timeout` of 30s against a Worker `DD_OP_SOURCE_OTEL_REQUEST_TIMEOUT_SECS` of 30 seconds is a race, not a margin. Leave the client comfortably above the Worker value.

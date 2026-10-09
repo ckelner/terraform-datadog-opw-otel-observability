@@ -1,0 +1,37 @@
+name: "Notebook ${label}"
+status: published
+time:
+  live_span: 1h
+metadata:
+  is_template: false
+  take_snapshots: false
+  type: runbook
+template_variables:
+  - name: cluster_name
+    prefix: cluster_name
+    default: "*"
+cells:
+  - definition:
+      type: markdown
+      text: |-
+        # Procedure
+
+        ${details}
+
+        ```sh
+        echo "$${shell}"
+        ```
+        Literal %%{if}, {{value}}, $cluster_name, and C:\logs.
+  - definition:
+      type: timeseries
+      title: "Graph ${label}"
+      requests:
+        - q: "sum:metric{$cluster_name}"
+          display_type: line
+    graph_size: m
+    time:
+      live_span: 4h
+  - definition:
+      type: markdown
+      text: |
+        Last paragraph.

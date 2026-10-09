@@ -1,0 +1,328 @@
+name: "OPW/OTel Runbook | OpenTelemetry Collector is refusing data"
+status: "published"
+time:
+  live_span: "1h"
+metadata:
+  is_template: false
+  take_snapshots: false
+  type: "runbook"
+template_variables:
+  - name: "pipeline_id"
+    prefix: "pipeline_id"
+    default: "*"
+  - name: "component_id"
+    prefix: "component_id"
+    default: "*"
+cells:
+  - definition:
+      type: "markdown"
+      text: |-
+        # Paging symptom: OpenTelemetry Collector is refusing data
+
+        [Find the Collector monitors](${app_url}/monitors/manage?q=tag%3A%22component%3Aotel-collector%22&p=1)${optional_monitor_otelcol_data}
+
+        Open [Assessing impact](${notebook_assessing_impact_url}) first to establish whether data is still buffered or already gone.
+
+        The Collector is rejecting log records at the receiver. Applications sending to it are getting errors back. This runbook identifies which part of the refusal chain fired and which destination caused the pressure.
+
+        The charts on this page are not scoped by `pipeline_id` or `component_id`. Collector self-telemetry does not carry OPW pipeline tags, so these metrics are grouped by `${collector_group}` and `exporter` instead.
+
+        ## The refusal chain
+
+        A Collector refuses data in a fixed order, and each link tells you something different.
+
+        1. The exporter's sending queue fills. `otelcol_exporter_queue_size` reaches `otelcol_exporter_queue_capacity`.
+        2. New batches cannot be enqueued. `otelcol_exporter_enqueue_failed_log_records` increments.
+        3. Unexported data accumulates in memory and the Go heap grows.
+        4. The `memory_limiter` processor crosses its soft limit and starts refusing. The refusal propagates back through the pipeline to the receiver.
+        5. The receiver returns an error to the application. `otelcol_receiver_refused_log_records` increments and the application sees HTTP 503.
+
+        Whether step 5 costs data depends on how logs reach this Collector, and the two cases are not close.
+
+        **Pushed over OTLP.** A 503 is a retryable response. An application with a retry policy and enough local buffering redelivers once pressure clears and nothing is lost. One that fires and forgets loses whatever it sent during the refusal window.
+
+        **Tailed with the `filelog` receiver.** Step 5 does not happen, because there is no caller to return 503 to. The receiver stops advancing its read offset and the files on disk become the buffer. `otelcol_receiver_refused_log_records` can therefore stay flat while the Collector is under real pressure, so read the `memory_limiter` counter and the exporter queue ratio instead. Loss happens only when log rotation outruns the reader. With kubelet defaults of `containerLogMaxSize: 10Mi` and `containerLogMaxFiles: 5` that is roughly 50 MiB per container of runway; an application writing its own files to a volume has whatever its own rotation policy allows.
+
+        Two `filelog` defaults make a Collector restart lossy no matter which mode you are in. `storage` defaults to none, so read offsets are held in memory only, and `start_at` defaults to `end`. A Collector that restarts resumes at the end of every file and the unread backlog is gone. Point `storage` at a `file_storage` extension and set `start_at: beginning` if restarts have to be non-lossy.
+
+        This also decides `block_on_overflow`. With `filelog` it is safe and correct, because blocking only means not reading further and the filesystem absorbs the pause. With pushed OTLP it blocks the caller instead, which moves the drop upstream into the SDK's bounded queue rather than preventing it.
+
+        ## Why memory_limiter is a shared, process-wide signal
+
+        The `memory_limiter` processor has a hard limit and a soft limit. The soft limit is `limit_mib` minus `spike_limit_mib`, or the equivalent subtraction when the limits are expressed as `limit_percentage` and `spike_limit_percentage`. Above the soft limit the processor refuses new data. Above the hard limit it also forces garbage collection.
+
+        The limiter reads total process memory, which is the whole Go heap for the Collector process. It has no idea which pipeline, exporter, or destination is holding that memory. A single slow destination can therefore fill the heap and cause the limiter to refuse data belonging to every other destination in the same Collector. This is why the memory_limiter monitor carries the `scope:shared-with-other-destinations` tag: the alert tells you the Collector is under pressure, not who caused it.
+
+        Comparing exporter queue fill across exporters is the only reliable way to attribute the pressure. Work through the charts in order.
+
+        ## Step 1: Confirm the refusals and their blast radius
+  - definition:
+      type: "timeseries"
+      title: "memory_limiter refused log records"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+        - "sum"
+      requests:
+        - display_type: "bars"
+          response_format: "timeseries"
+          formulas:
+            - alias: "limiter refused"
+              formula: "limiter"
+          queries:
+            - data_source: "metrics"
+              name: "limiter"
+              query: "sum:${memory_limiter_metric}{*} by {${collector_group}}.as_rate()"
+          style:
+            palette: "warm"
+            line_type: "solid"
+            line_width: "normal"
+  - definition:
+      type: "markdown"
+      text: ""
+  - definition:
+      type: "timeseries"
+      title: "Receiver refused log records"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+        - "sum"
+      requests:
+        - display_type: "bars"
+          response_format: "timeseries"
+          formulas:
+            - alias: "receiver refused"
+              formula: "refused"
+          queries:
+            - data_source: "metrics"
+              name: "refused"
+              query: "sum:otelcol_receiver_refused_log_records{*} by {${collector_group}}.as_rate()"
+          style:
+            palette: "warm"
+            line_type: "solid"
+            line_width: "normal"
+  - definition:
+      type: "markdown"
+      text: |-
+        ### Interpret the refusals
+
+        * Both charts rising together is the normal shape of memory-limiter backpressure: the limiter refuses, the receiver reports the refusal to the caller.
+        * Receiver refusals without limiter refusals point somewhere other than memory. Check the receiver's own limits, authentication failures, and malformed payload rejections.
+        * Limiter refusals without receiver refusals mean the limiter is shedding data that originated inside the Collector, for example from a `filelog` receiver that does not surface a caller error.
+
+        Note which `${collector_group}` values are affected. A single group points at one workload. Many groups at once points at a shared destination.
+
+        ## Step 2: Attribute the pressure to a destination
+  - definition:
+      type: "timeseries"
+      title: "Exporter queue fill ratio by exporter"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+      requests:
+        - display_type: "line"
+          response_format: "timeseries"
+          formulas:
+            - alias: "queue fill ratio"
+              formula: "size / capacity"
+          queries:
+            - data_source: "metrics"
+              name: "size"
+              query: "avg:otelcol_exporter_queue_size{*} by {exporter}"
+            - data_source: "metrics"
+              name: "capacity"
+              query: "max:otelcol_exporter_queue_capacity{*} by {exporter}"
+          style:
+            palette: "dog_classic"
+            line_type: "solid"
+            line_width: "normal"
+      yaxis:
+        include_zero: true
+        min: "0"
+        max: "1"
+        scale: "linear"
+  - definition:
+      type: "markdown"
+      text: |-
+        ### Read the attribution chart
+
+        This chart is grouped by `exporter` and deliberately not filtered to the BYOC exporter. The exporter whose ratio climbs first and sits highest is the destination consuming the heap. Everything else in the Collector is collateral damage.
+
+        * If the BYOC exporter is the saturated one, continue to step 3 and then move to the OPW runbooks.
+        * If a different exporter is saturated, the BYOC path is healthy and the fix belongs to that other destination. Fixing OPW will not help.
+        * If no exporter is saturated but the limiter is still refusing, something other than export backlog is consuming memory. Look at receiver batch sizes, processor cardinality, and any in-memory enrichment caches.
+
+        ## Step 3: Check the BYOC exporter specifically
+  - definition:
+      type: "timeseries"
+      title: "BYOC exporter enqueue failures"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+        - "sum"
+      requests:
+        - display_type: "bars"
+          response_format: "timeseries"
+          formulas:
+            - alias: "enqueue failed"
+              formula: "enqueue_failed"
+          queries:
+            - data_source: "metrics"
+              name: "enqueue_failed"
+              query: "sum:otelcol_exporter_enqueue_failed_log_records{exporter:${byoc_exporter}} by {${collector_group}}.as_rate()"
+          style:
+            palette: "warm"
+            line_type: "solid"
+            line_width: "normal"
+  - definition:
+      type: "markdown"
+      text: ""
+  - definition:
+      type: "timeseries"
+      title: "BYOC exporter send failures"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+        - "sum"
+      requests:
+        - display_type: "bars"
+          response_format: "timeseries"
+          formulas:
+            - alias: "send failed"
+              formula: "send_failed"
+          queries:
+            - data_source: "metrics"
+              name: "send_failed"
+              query: "sum:otelcol_exporter_send_failed_log_records{exporter:${byoc_exporter}} by {${collector_group}}.as_rate()"
+          style:
+            palette: "orange"
+            line_type: "solid"
+            line_width: "normal"
+  - definition:
+      type: "markdown"
+      text: |-
+        ### Separate the two failure modes
+
+        Send failures and enqueue failures mean different things and have different fixes.
+
+        A send failure is a rejected or failed export attempt against OPW. Each one is retried according to the exporter's retry policy, so a low rate of send failures with a stable queue is survivable. Sustained send failures are the signal that OPW is rejecting or timing out requests, which is the OPW side of this incident.
+
+        An enqueue failure means the sending queue was already full when a new batch arrived. That batch never got a retry: it was dropped at the door. Enqueue failures always follow sustained send failures or a slow destination, so treat the send failures as the cause and the enqueue failures as the damage.
+
+        ## Step 4: Confirm the memory picture
+  - definition:
+      type: "timeseries"
+      title: "Collector process resident memory"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+      requests:
+        - display_type: "line"
+          response_format: "timeseries"
+          formulas:
+            - alias: "RSS"
+              formula: "rss"
+              number_format:
+                unit:
+                  type: "canonical_unit"
+                  unit_name: "byte"
+          queries:
+            - data_source: "metrics"
+              name: "rss"
+              query: "avg:otelcol_process_memory_rss{*} by {${collector_group}}"
+          style:
+            palette: "dog_classic"
+            line_type: "solid"
+            line_width: "normal"
+  - definition:
+      type: "markdown"
+      text: ""
+  - definition:
+      type: "timeseries"
+      title: "Reconstructed loss: accepted minus exported"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+        - "sum"
+      requests:
+        - display_type: "line"
+          response_format: "timeseries"
+          formulas:
+            - alias: "accepted"
+              formula: "accepted"
+            - alias: "exported"
+              formula: "exported"
+            - alias: "gap"
+              formula: "accepted - exported"
+          queries:
+            - data_source: "metrics"
+              name: "accepted"
+              query: "sum:otelcol_receiver_accepted_log_records{*}.as_rate()"
+            - data_source: "metrics"
+              name: "exported"
+              query: "sum:otelcol_exporter_sent_log_records{*}.as_rate()"
+          style:
+            palette: "dog_classic"
+            line_type: "solid"
+            line_width: "normal"
+  - definition:
+      type: "markdown"
+      text: |-
+        ### Reconstructing loss
+
+        The Collector has no single counter for records it lost. Reconstruct it by subtracting `otelcol_exporter_sent_log_records` from `otelcol_receiver_accepted_log_records`.
+
+        Read the gap carefully. During healthy operation a positive gap is just in-flight data sitting in the sending queue, and it closes again when the queue drains. A gap that opens and never closes is data that left the receiver and never reached a destination. Fan-out also inflates the gap: if one pipeline feeds two exporters, the exported count is roughly double the accepted count, so compare shapes over time rather than absolute values.
+
+        The authoritative record of terminal loss is the Collector log line `Exporting failed. Dropping data.`, which is only written after retries are exhausted.
+
+        ## Mitigation
+
+        Raise the memory headroom only after attribution. Increasing `limit_mib` on a Collector whose BYOC exporter queue is permanently full delays the refusal by a few minutes and changes nothing else.
+
+        * If the BYOC exporter is the saturated one, the fix is on the OPW side: give OPW more capacity, raise its request admission limits, or reduce the volume sent to it. Open the OPW backpressure triage runbook.
+        * If another exporter is saturated, isolate it. Giving each destination its own Collector process, or at minimum its own memory budget, stops one slow destination from refusing everybody else's data.
+        * If the application cannot tolerate a 503, confirm it retries with backoff and has somewhere to hold data while it does. A Collector that refuses correctly is still a data-loss event for a sender that does not retry.
+        * Increasing `sending_queue.queue_size` increases how much unexported data the Collector holds in the heap. Raise the memory limit alongside it or the limiter will fire sooner, not later.

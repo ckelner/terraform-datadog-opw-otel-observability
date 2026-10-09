@@ -1,0 +1,14 @@
+{{#is_alert}}
+## What's happening?
+OPW refused **{{value}} requests** over `{{protocol.name}}` in pipeline `{{pipeline_name.name}}` during the last 15 minutes, returning HTTP 429 (gRPC 14 UNAVAILABLE) because it was at its concurrency cap. Those responses are retryable, so this is not necessarily data loss, but it does mean the fleet is undersized or traffic is concentrated on too few pods.
+{{/is_alert}}
+{{#is_recovery}}OPW stopped shedding `{{protocol.name}}` requests in pipeline `{{pipeline_name.name}}`.{{/is_recovery}}
+
+## Impact
+[Assess impact](${notebook_assessing_impact_url})
+
+## What to do
+[Open the runbook](${notebook_opw_request_admission_shedding_url})
+
+## Links
+- [Observability Pipelines dashboard](${op_dashboard_url})

@@ -1,0 +1,17 @@
+{{#is_alert}}
+## What's happening?
+The source buffer on `{{component_id.name}}` in pipeline `{{pipeline_name.name}}` stayed above 90% full for the full last 10 minutes, with a lowest reading of **{{value}}** of capacity. Capacity is 1,000 events per vCPU: once this reaches 1.0 the source blocks and inbound requests hang.
+{{/is_alert}}{{#is_warning}}
+## What's happening?
+The source buffer on `{{component_id.name}}` in pipeline `{{pipeline_name.name}}` stayed above 70% full for the full last 10 minutes, with a lowest reading of **{{value}}** of capacity. Capacity is 1,000 events per vCPU, and headroom is shrinking.
+{{/is_warning}}
+{{#is_recovery}}The source buffer recovered for `{{component_id.name}}` in pipeline `{{pipeline_name.name}}`.{{/is_recovery}}
+
+## Impact
+[Assess impact](${notebook_assessing_impact_url})
+
+## What to do
+[Open the runbook](${notebook_opw_source_buffer_saturated_url})
+
+## Links
+- [Observability Pipelines dashboard](${op_dashboard_url})

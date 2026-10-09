@@ -1,0 +1,429 @@
+{
+  "schema_version": "1",
+  "defaults": {
+    "paging": {
+      "priority": 1,
+      "tags": [
+        "service:byoc-pipeline"
+      ],
+      "options": {
+        "evaluation_delay": 60,
+        "include_tags": true,
+        "notify_no_data": false,
+        "on_missing_data": "resolve",
+        "renotify_interval": 30,
+        "renotify_occurrences": 5,
+        "renotify_statuses": [
+          "alert"
+        ],
+        "require_full_window": false
+      }
+    },
+    "investigation": {
+      "priority": 3,
+      "tags": [
+        "service:byoc-pipeline",
+        "signal:investigate"
+      ],
+      "options": {
+        "evaluation_delay": 60,
+        "include_tags": true,
+        "new_group_delay": 300,
+        "notify_no_data": false,
+        "on_missing_data": "resolve",
+        "renotify_interval": 240,
+        "renotify_occurrences": 1,
+        "renotify_statuses": [
+          "alert"
+        ],
+        "require_full_window": true
+      }
+    }
+  },
+  "monitors": [
+    {
+      "asset_id": "monitor.opw-source-send-latency-high",
+      "class": "paging",
+      "runbook_asset_id": "notebook.opw-backpressure-triage",
+      "payload": {
+        "name": "[OPW][{{pipeline_name.name}}] Source is blocked pushing into the pipeline on {{component_id.name}}",
+        "type": "query alert",
+        "query": "avg(last_10m):avg:pipelines.source_send_batch_latency_seconds{${pipeline_scope}} by {pipeline_id,pipeline_name,component_id} > 5",
+        "tags": [
+          "component:opw",
+          "symptom:backpressure"
+        ],
+        "options": {
+          "new_group_delay": 300,
+          "notify_by": [
+            "pipeline_id",
+            "component_id"
+          ],
+          "thresholds": {
+            "critical": 5,
+            "warning": 1
+          }
+        }
+      }
+    },
+    {
+      "asset_id": "monitor.opw-source-lag-high",
+      "class": "paging",
+      "runbook_asset_id": "notebook.opw-backpressure-triage",
+      "payload": {
+        "name": "[OPW][{{pipeline_name.name}}] Source lag is high on {{component_id.name}}",
+        "type": "query alert",
+        "query": "avg(last_10m):avg:pipelines.source_lag_time_seconds{${pipeline_scope}} by {pipeline_id,pipeline_name,component_id} > 60",
+        "tags": [
+          "component:opw",
+          "symptom:backpressure"
+        ],
+        "options": {
+          "new_group_delay": 300,
+          "notify_by": [
+            "pipeline_id",
+            "component_id"
+          ],
+          "thresholds": {
+            "critical": 60,
+            "warning": 10
+          }
+        }
+      }
+    },
+    {
+      "asset_id": "monitor.opw-buffer-write-stall",
+      "class": "paging",
+      "runbook_asset_id": "notebook.opw-backpressure-triage",
+      "payload": {
+        "name": "[OPW][{{pipeline_name.name}}] Buffer writes are slow on {{component_id.name}}",
+        "type": "query alert",
+        "query": "avg(last_10m):avg:pipelines.buffer_send_duration_seconds{${pipeline_scope}} by {pipeline_id,pipeline_name,component_id} > 0.5",
+        "tags": [
+          "component:opw",
+          "symptom:buffer-stall"
+        ],
+        "options": {
+          "new_group_delay": 300,
+          "notify_by": [
+            "pipeline_id",
+            "component_id"
+          ],
+          "thresholds": {
+            "critical": 0.5,
+            "warning": 0.1
+          }
+        }
+      }
+    },
+    {
+      "asset_id": "monitor.opw-source-buffer-saturated",
+      "class": "paging",
+      "runbook_asset_id": "notebook.opw-source-buffer-saturated",
+      "payload": {
+        "name": "[OPW][{{pipeline_name.name}}] Source buffer is nearly full on {{component_id.name}}",
+        "type": "query alert",
+        "query": "min(last_10m):(avg:pipelines.source_buffer_utilization_mean{${pipeline_scope}} by {pipeline_id,pipeline_name,component_id,host} / max:pipelines.source_buffer_max_size_events{${pipeline_scope}} by {pipeline_id,pipeline_name,component_id,host}) > 0.9",
+        "tags": [
+          "component:opw",
+          "symptom:backpressure"
+        ],
+        "options": {
+          "evaluation_delay": 120,
+          "new_group_delay": 600,
+          "notify_by": [
+            "pipeline_id",
+            "component_id"
+          ],
+          "require_full_window": true,
+          "thresholds": {
+            "critical": 0.9,
+            "warning": 0.7
+          }
+        }
+      }
+    },
+    {
+      "asset_id": "monitor.opw-source-buffer-metric-absent",
+      "class": "paging",
+      "runbook_asset_id": "notebook.opw-source-buffer-saturated",
+      "payload": {
+        "name": "[OPW][{{pipeline_name.name}}] Source buffer metric stopped reporting on {{host.name}}",
+        "type": "query alert",
+        "query": "avg(last_15m):avg:pipelines.source_buffer_utilization_mean{${pipeline_scope}} by {pipeline_id,pipeline_name,host} < -1",
+        "tags": [
+          "component:opw",
+          "symptom:signal-loss"
+        ],
+        "options": {
+          "new_group_delay": 900,
+          "notify_by": [
+            "pipeline_id"
+          ],
+          "on_missing_data": "show_and_notify_no_data",
+          "thresholds": {
+            "critical": -1
+          }
+        }
+      }
+    },
+    {
+      "asset_id": "monitor.opw-request-admission-saturated",
+      "class": "investigation",
+      "runbook_asset_id": "notebook.opw-request-admission-shedding",
+      "payload": {
+        "name": "[OPW][{{pipeline_name.name}}][Investigate] Request admission is saturating on {{component_id.name}}",
+        "type": "query alert",
+        "query": "avg(last_10m):(avg:pipelines.component_request_active{${pipeline_scope}} by {pipeline_id,pipeline_name,component_id} / max:pipelines.component_request_concurrency_limit{${pipeline_scope}} by {pipeline_id,pipeline_name,component_id}) > 0.8",
+        "tags": [
+          "component:opw",
+          "symptom:admission-saturation"
+        ],
+        "options": {
+          "notify_by": [
+            "pipeline_id",
+            "component_id"
+          ],
+          "thresholds": {
+            "critical": 0.8,
+            "warning": 0.6
+          }
+        }
+      }
+    },
+    {
+      "asset_id": "monitor.opw-requests-load-shed",
+      "class": "paging",
+      "runbook_asset_id": "notebook.opw-request-admission-shedding",
+      "payload": {
+        "name": "[OPW][{{pipeline_name.name}}] Requests are being load shed over {{protocol.name}}",
+        "type": "query alert",
+        "query": "sum(last_15m):sum:pipelines.component_load_shed_requests_total{${pipeline_scope}} by {pipeline_id,pipeline_name,protocol}.as_count() > 0",
+        "tags": [
+          "component:opw",
+          "symptom:admission-rejection"
+        ],
+        "options": {
+          "new_group_delay": 300,
+          "notify_by": [
+            "pipeline_id"
+          ],
+          "thresholds": {
+            "critical": 0
+          }
+        }
+      }
+    },
+    {
+      "asset_id": "monitor.opw-requests-timed-out",
+      "class": "paging",
+      "runbook_asset_id": "notebook.opw-request-admission-shedding",
+      "payload": {
+        "name": "[OPW][{{pipeline_name.name}}] Requests are timing out over {{protocol.name}}",
+        "type": "query alert",
+        "query": "sum(last_15m):sum:pipelines.component_timed_out_requests_total{${pipeline_scope}} by {pipeline_id,pipeline_name,protocol}.as_count() > 0",
+        "tags": [
+          "component:opw",
+          "symptom:admission-rejection"
+        ],
+        "options": {
+          "new_group_delay": 300,
+          "notify_by": [
+            "pipeline_id"
+          ],
+          "thresholds": {
+            "critical": 0
+          }
+        }
+      }
+    },
+    {
+      "asset_id": "monitor.opw-disk-buffer-space-low",
+      "class": "paging",
+      "runbook_asset_id": "notebook.opw-backpressure-triage",
+      "payload": {
+        "name": "[OPW][{{pipeline_name.name}}] Disk buffer volume is running out of space on {{host.name}}",
+        "type": "query alert",
+        "query": "max(last_10m):(avg:pipelines.data_dir_available_bytes{${worker_scope}} by {pipeline_id,pipeline_name,host} / max:pipelines.data_dir_capacity_bytes{${worker_scope}} by {pipeline_id,pipeline_name,host}) < 0.2",
+        "tags": [
+          "component:opw",
+          "symptom:disk-exhaustion"
+        ],
+        "options": {
+          "evaluation_delay": 120,
+          "new_group_delay": 600,
+          "notify_by": [
+            "pipeline_id"
+          ],
+          "require_full_window": true,
+          "thresholds": {
+            "critical": 0.2,
+            "warning": 0.3
+          }
+        }
+      }
+    },
+    {
+      "asset_id": "monitor.otelcol-memory-limiter-refusing",
+      "class": "paging",
+      "runbook_asset_id": "notebook.otelcol-refusing-data",
+      "payload": {
+        "name": "[OTelCol][{{${collector_group}.name}}] memory_limiter is refusing data",
+        "type": "query alert",
+        "query": "sum(last_15m):sum:${memory_limiter_metric}{*} by {processor,${collector_group}}.as_count() > 0",
+        "tags": [
+          "component:otel-collector",
+          "symptom:data-refused",
+          "scope:shared-with-other-destinations"
+        ],
+        "options": {
+          "new_group_delay": 300,
+          "notify_by": [
+            "${collector_group}"
+          ],
+          "thresholds": {
+            "critical": 0
+          }
+        }
+      }
+    },
+    {
+      "asset_id": "monitor.otelcol-receiver-refusing",
+      "class": "paging",
+      "runbook_asset_id": "notebook.otelcol-refusing-data",
+      "payload": {
+        "name": "[OTelCol][{{${collector_group}.name}}] Receiver is refusing log records",
+        "type": "query alert",
+        "query": "sum(last_15m):sum:otelcol_receiver_refused_log_records{*} by {receiver,${collector_group}}.as_count() > 0",
+        "tags": [
+          "component:otel-collector",
+          "symptom:data-refused",
+          "scope:shared-with-other-destinations"
+        ],
+        "options": {
+          "new_group_delay": 300,
+          "notify_by": [
+            "${collector_group}"
+          ],
+          "thresholds": {
+            "critical": 0
+          }
+        }
+      }
+    },
+    {
+      "asset_id": "monitor.otelcol-exporter-enqueue-failed",
+      "class": "paging",
+      "runbook_asset_id": "notebook.otelcol-refusing-data",
+      "payload": {
+        "name": "[OTelCol][{{${collector_group}.name}}] BYOC exporter queue is rejecting data",
+        "type": "query alert",
+        "query": "sum(last_15m):sum:otelcol_exporter_enqueue_failed_log_records{${exporter_scope}} by {exporter,${collector_group}}.as_count() > 0",
+        "tags": [
+          "component:otel-collector",
+          "symptom:data-refused"
+        ],
+        "options": {
+          "new_group_delay": 300,
+          "notify_by": [
+            "${collector_group}"
+          ],
+          "thresholds": {
+            "critical": 0
+          }
+        }
+      }
+    },
+    {
+      "asset_id": "monitor.otelcol-exporter-queue-saturated",
+      "class": "paging",
+      "runbook_asset_id": "notebook.otelcol-refusing-data",
+      "payload": {
+        "name": "[OTelCol][{{${collector_group}.name}}] Exporter queue is filling on {{exporter.name}}",
+        "type": "query alert",
+        "query": "avg(last_10m):(avg:otelcol_exporter_queue_size{*} by {exporter,${collector_group}} / max:otelcol_exporter_queue_capacity{*} by {exporter,${collector_group}}) > 0.8",
+        "tags": [
+          "component:otel-collector",
+          "symptom:queue-saturation"
+        ],
+        "options": {
+          "evaluation_delay": 120,
+          "new_group_delay": 600,
+          "notify_by": [
+            "${collector_group}"
+          ],
+          "require_full_window": true,
+          "thresholds": {
+            "critical": 0.8,
+            "warning": 0.5
+          }
+        }
+      }
+    },
+    {
+      "asset_id": "monitor.otelcol-terminal-data-loss",
+      "class": "paging",
+      "runbook_asset_id": "notebook.otelcol-refusing-data",
+      "payload": {
+        "name": "[OTelCol][{{${collector_group}.name}}] Collector dropped data after exhausting retries",
+        "type": "log alert",
+        "query": "logs(\"${collector_log_query} \\\"Exporting failed. Dropping data.\\\"\").index(\"*\").rollup(\"count\").by(\"${collector_group}\").last(\"15m\") > 0",
+        "tags": [
+          "component:otel-collector",
+          "symptom:data-loss"
+        ],
+        "options": {
+          "enable_logs_sample": true,
+          "new_group_delay": 300,
+          "groupby_simple_monitor": false,
+          "thresholds": {
+            "critical": 0
+          }
+        }
+      }
+    },
+    {
+      "asset_id": "monitor.otelcol-exporter-send-failed",
+      "class": "investigation",
+      "runbook_asset_id": "notebook.otelcol-refusing-data",
+      "payload": {
+        "name": "[OTelCol][{{${collector_group}.name}}][Investigate] BYOC exporter send attempts are failing",
+        "type": "query alert",
+        "query": "sum(last_15m):sum:otelcol_exporter_send_failed_log_records{${exporter_scope}} by {exporter,${collector_group}}.as_count() > 0",
+        "tags": [
+          "component:otel-collector",
+          "symptom:export-failure"
+        ],
+        "options": {
+          "notify_by": [
+            "${collector_group}"
+          ],
+          "thresholds": {
+            "critical": 0
+          }
+        }
+      }
+    },
+    {
+      "asset_id": "monitor.otelcol-telemetry-absent",
+      "class": "investigation",
+      "runbook_asset_id": "notebook.otelcol-refusing-data",
+      "payload": {
+        "name": "[OTelCol][{{${collector_group}.name}}][Investigate] Collector self-telemetry stopped reporting",
+        "type": "query alert",
+        "query": "avg(last_15m):avg:otelcol_process_uptime{*} by {${collector_group}} < -1",
+        "tags": [
+          "component:otel-collector",
+          "symptom:signal-loss"
+        ],
+        "options": {
+          "new_group_delay": 900,
+          "on_missing_data": "show_and_notify_no_data",
+          "thresholds": {
+            "critical": -1
+          }
+        }
+      }
+    }
+  ]
+}

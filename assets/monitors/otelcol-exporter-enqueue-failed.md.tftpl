@@ -1,0 +1,14 @@
+{{#is_alert}}
+## What's happening?
+The BYOC exporter `{{exporter.name}}` (matched by `${byoc_exporter}`) failed to enqueue **{{value}} log records** during the last 15 minutes: its sending queue was full and rejected the batch. Unlike the receiver and `memory_limiter` signals, this one is attributable to the BYOC path.
+{{/is_alert}}
+{{#is_recovery}}The BYOC exporter `{{exporter.name}}` is accepting records into its sending queue again.{{/is_recovery}}
+
+## Impact
+[Assess impact](${notebook_assessing_impact_url})
+
+## What to do
+[Open the runbook](${notebook_otelcol_refusing_data_url})
+
+## Links
+- [Observability Pipelines dashboard](${op_dashboard_url})

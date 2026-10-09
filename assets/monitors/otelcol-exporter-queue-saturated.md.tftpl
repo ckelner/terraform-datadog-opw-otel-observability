@@ -1,0 +1,17 @@
+{{#is_alert}}
+## What's happening?
+The sending queue for exporter `{{exporter.name}}` averaged **{{value}}** of capacity for the full last 10 minutes, above the 80% threshold. This monitor covers every exporter on purpose: it is both a leading indicator of enqueue failures and the attribution tool, because whichever exporter's queue is growing is the one consuming Collector memory.
+{{/is_alert}}{{#is_warning}}
+## What's happening?
+The sending queue for exporter `{{exporter.name}}` averaged **{{value}}** of capacity for the full last 10 minutes, above the 50% warning threshold. Compare it against the other exporters: the one that is growing is the one consuming Collector memory.
+{{/is_warning}}
+{{#is_recovery}}The sending queue for exporter `{{exporter.name}}` drained back below threshold.{{/is_recovery}}
+
+## Impact
+[Assess impact](${notebook_assessing_impact_url})
+
+## What to do
+[Open the runbook](${notebook_otelcol_refusing_data_url})
+
+## Links
+- [Observability Pipelines dashboard](${op_dashboard_url})

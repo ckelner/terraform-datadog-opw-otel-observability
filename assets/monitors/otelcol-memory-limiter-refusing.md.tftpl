@@ -1,0 +1,14 @@
+{{#is_alert}}
+## What's happening?
+The Collector `memory_limiter` processor `{{processor.name}}` refused **{{value}} records** during the last 15 minutes. This signal is shared across every destination the Collector ships to, not just BYOC, because `memory_limiter` reads process-wide heap: it does not prove the BYOC path caused the pressure. Use the exporter queue comparison to attribute it. Whether this costs data depends on how logs reach the Collector: a pushed OTLP client loses data unless it retries, while a `filelog` receiver simply stops advancing its read offset and loses nothing until log rotation outruns it.
+{{/is_alert}}
+{{#is_recovery}}`memory_limiter` processor `{{processor.name}}` stopped refusing data.{{/is_recovery}}
+
+## Impact
+[Assess impact](${notebook_assessing_impact_url})
+
+## What to do
+[Open the runbook](${notebook_otelcol_refusing_data_url})
+
+## Links
+- [Observability Pipelines dashboard](${op_dashboard_url})

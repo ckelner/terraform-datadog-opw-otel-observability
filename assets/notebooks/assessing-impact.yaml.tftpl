@@ -1,0 +1,214 @@
+name: "OPW/OTel Runbook | Assessing impact"
+status: "published"
+time:
+  live_span: "1h"
+metadata:
+  is_template: false
+  take_snapshots: false
+  type: "runbook"
+template_variables:
+  - name: "pipeline_id"
+    prefix: "pipeline_id"
+    default: "*"
+  - name: "component_id"
+    prefix: "component_id"
+    default: "*"
+cells:
+  - definition:
+      type: "markdown"
+      text: |-
+        # Assessing impact
+
+        * [Open the Observability Pipelines dashboard](${op_dashboard_url})
+        * [Find the pipeline monitors](${app_url}/monitors/manage?q=tag%3A%22service%3Abyoc-pipeline%22&p=1)
+
+        Every other runbook in this set links here. Open it first and answer two questions before changing anything:
+
+        1. Are logs actually being lost right now, or are they still buffered?
+        2. How much runway is left before buffers fill and loss becomes unavoidable?
+
+        Select the affected `pipeline_id`. Leave `component_id` at `*` until a specific component is implicated.
+
+        ## Three states that look similar and are not
+
+        | State | What the signals look like | Is data lost |
+        |-|-|-|
+        | Backpressure, no loss yet | Buffers filling, source send latency and lag rising, unintentional discards flat at zero | No. You have runway. |
+        | Discarded at OPW | `component_discarded_events_total{intentional:false}` increasing | Maybe. See below. |
+        | Terminal loss at the Collector | Collector logged `Exporting failed. Dropping data.` after retries were exhausted | Yes. Unrecoverable. |
+
+        Backpressure with no loss is the state you want to be in when you start work. Buffers are absorbing the slowdown and the only cost so far is delivery latency. Fix the downstream cause and the backlog drains.
+
+        An OPW unintentional discard is not automatically a lost log. OPW increments this counter when a send is interrupted mid-flight, which includes the case where the client cancelled the request or disconnected. If the sender retried, the same events arrived on a later request and nothing was lost. Treat a rising discard counter as a signal to go find out whether the sender retries, not as a confirmed loss count.
+
+        Terminal loss at the Collector is different. The Collector only logs `Exporting failed. Dropping data.` after its retry policy is exhausted, at which point the batch is gone and no upstream component still holds it.
+
+        These two counters measure different things at different layers. OPW counts events it stopped processing; the Collector counts log records it refused or dropped. Never add them together and never treat one as a cross-check on the other.
+
+        ## Step 1: Compare ingest with egress
+  - definition:
+      type: "timeseries"
+      title: "Events received by component kind"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+        - "sum"
+      requests:
+        - display_type: "line"
+          response_format: "timeseries"
+          formulas:
+            - alias: "received"
+              formula: "received"
+              number_format:
+                unit:
+                  type: "canonical_unit"
+                  unit_name: "event"
+                  per_unit_name: "second"
+          queries:
+            - data_source: "metrics"
+              name: "received"
+              query: "sum:pipelines.component_received_events_total{!component_id:_*,pipeline_id:$pipeline_id} by {component_kind}.as_rate()"
+          style:
+            palette: "dog_classic"
+            line_type: "solid"
+            line_width: "normal"
+  - definition:
+      type: "markdown"
+      text: ""
+  - definition:
+      type: "timeseries"
+      title: "Events sent by component kind"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+        - "sum"
+      requests:
+        - display_type: "line"
+          response_format: "timeseries"
+          formulas:
+            - alias: "sent"
+              formula: "sent"
+              number_format:
+                unit:
+                  type: "canonical_unit"
+                  unit_name: "event"
+                  per_unit_name: "second"
+          queries:
+            - data_source: "metrics"
+              name: "sent"
+              query: "sum:pipelines.component_sent_events_total{!component_id:_*,pipeline_id:$pipeline_id} by {component_kind}.as_rate()"
+          style:
+            palette: "cool"
+            line_type: "solid"
+            line_width: "normal"
+  - definition:
+      type: "markdown"
+      text: |-
+        ### Interpret ingest versus egress
+
+        * Source received rate holding steady while sink sent rate falls means the pipeline is absorbing the difference into buffers. That is backpressure.
+        * Both rates falling together usually means the senders slowed down or stopped, not that OPW is blocked. Check the application side before touching the pipeline.
+        * Sink sent rate at zero while source received rate is non-zero is the most urgent case. Runway is being consumed at the full ingest rate.
+
+        Record the ingest rate, the egress rate, and the gap between them. The gap divided into remaining buffer bytes is your runway.
+
+        ## Step 2: Check whether events are already being discarded
+  - definition:
+      type: "timeseries"
+      title: "Unintentionally discarded events by component"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+        - "sum"
+      requests:
+        - display_type: "bars"
+          response_format: "timeseries"
+          formulas:
+            - alias: "discarded"
+              formula: "discarded"
+          queries:
+            - data_source: "metrics"
+              name: "discarded"
+              query: "sum:pipelines.component_discarded_events_total{!component_id:_*,pipeline_id:$pipeline_id,intentional:false} by {component_id}.as_count()"
+          style:
+            palette: "warm"
+            line_type: "solid"
+            line_width: "normal"
+  - definition:
+      type: "markdown"
+      text: |-
+        ### Interpret discards
+
+        Any non-zero value here is worth investigating, but it is not proof of loss on its own. The counter carries no reason tag, so it cannot tell you why the event was discarded. Confirm sender retry behaviour before reporting a loss figure to anyone.
+
+        Record the component, the time range, and the count. If the sender does not retry, that count is the floor on data loss.
+
+        ## Step 3: Measure remaining disk buffer runway
+  - definition:
+      type: "timeseries"
+      title: "Disk buffer space remaining (fraction of capacity)"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+      requests:
+        - display_type: "line"
+          response_format: "timeseries"
+          formulas:
+            - alias: "fraction available"
+              formula: "available / capacity"
+          queries:
+            - data_source: "metrics"
+              name: "available"
+              query: "avg:pipelines.data_dir_available_bytes{pipeline_id:$pipeline_id} by {host}"
+            - data_source: "metrics"
+              name: "capacity"
+              query: "max:pipelines.data_dir_capacity_bytes{pipeline_id:$pipeline_id} by {host}"
+          style:
+            palette: "dog_classic"
+            line_type: "solid"
+            line_width: "normal"
+      yaxis:
+        include_zero: true
+        min: "0"
+        max: "1"
+        scale: "linear"
+  - definition:
+      type: "markdown"
+      text: |-
+        ### Decide how much time you have
+
+        The paging threshold on this ratio is 0.2. Below that, the disk buffer volume is close enough to full that a sink outage of any length starts costing data.
+
+        * A flat or rising fraction means the pipeline is draining as fast as it fills. Investigate without time pressure.
+        * A falling fraction means delivery is not keeping up. Extrapolate the slope to zero and treat that as your deadline.
+        * Escalate before the remaining runway is shorter than the time you expect the mitigation to take, not after.
+
+        Expanding the disk buffer volume buys investigation time. It does not fix the write path, and the extra space fills at the same rate.
+
+        ## Where to go next
+
+        Once you know the state and the runway, return to the runbook that sent you here. If you arrived here directly, open the backpressure triage runbook and walk the three layers bottom-up, starting at the destination.

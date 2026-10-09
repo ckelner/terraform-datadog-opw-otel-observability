@@ -1,0 +1,17 @@
+{{#is_alert}}
+## What's happening?
+Writing one payload into the destination buffer for `{{component_id.name}}` in pipeline `{{pipeline_name.name}}` took **{{value}} seconds** on average over the last 10 minutes, against a baseline near 0.003s. The buffer's single-threaded serialization path is the bottleneck here, so adding disk throughput will not help.
+{{/is_alert}}{{#is_warning}}
+## What's happening?
+Writing one payload into the destination buffer for `{{component_id.name}}` in pipeline `{{pipeline_name.name}}` took **{{value}} seconds** on average over the last 10 minutes, above the 0.1s warning threshold and well above the ~0.003s baseline.
+{{/is_warning}}
+{{#is_recovery}}Buffer write duration recovered for `{{component_id.name}}` in pipeline `{{pipeline_name.name}}`.{{/is_recovery}}
+
+## Impact
+[Assess impact](${notebook_assessing_impact_url})
+
+## What to do
+[Open the runbook](${notebook_opw_backpressure_triage_url})
+
+## Links
+- [Observability Pipelines dashboard](${op_dashboard_url})

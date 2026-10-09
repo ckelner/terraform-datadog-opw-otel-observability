@@ -1,0 +1,14 @@
+{{#is_alert}}
+## What's happening?
+`pipelines.source_buffer_utilization_mean` stopped reporting for pipeline `{{pipeline_name.name}}` on `{{host.name}}`. OPW stops emitting this metric once the source buffer is completely full, so absence can mean total saturation rather than a dead pod. Check the source buffer saturation monitor and worker liveness together before concluding the worker is gone.
+{{/is_alert}}
+{{#is_recovery}}The source buffer metric is reporting again for `{{pipeline_name.name}}` on `{{host.name}}`.{{/is_recovery}}
+
+## Impact
+[Assess impact](${notebook_assessing_impact_url})
+
+## What to do
+[Open the runbook](${notebook_opw_source_buffer_saturated_url})
+
+## Links
+- [Observability Pipelines dashboard](${op_dashboard_url})

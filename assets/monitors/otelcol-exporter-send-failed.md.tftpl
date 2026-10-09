@@ -1,0 +1,14 @@
+{{#is_alert}}
+## What's happening?
+The BYOC exporter `{{exporter.name}}` (matched by `${byoc_exporter}`) recorded **{{value}} failed log record sends** during the last 15 minutes. This counter increments on every retry attempt, so on its own it does not mean data was lost: treat it as a symptom of a slow or rejecting OPW. Correlate with the terminal data loss monitor to find out whether anything was actually dropped.
+{{/is_alert}}
+{{#is_recovery}}Send attempts from the BYOC exporter `{{exporter.name}}` stopped failing.{{/is_recovery}}
+
+## Impact
+[Assess impact](${notebook_assessing_impact_url})
+
+## What to do
+[Open the runbook](${notebook_otelcol_refusing_data_url})
+
+## Links
+- [Observability Pipelines dashboard](${op_dashboard_url})

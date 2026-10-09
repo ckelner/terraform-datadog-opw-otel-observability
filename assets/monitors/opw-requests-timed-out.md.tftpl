@@ -1,0 +1,14 @@
+{{#is_alert}}
+## What's happening?
+**{{value}} requests** over `{{protocol.name}}` in pipeline `{{pipeline_name.name}}` exceeded the 30 second processing timeout during the last 15 minutes, and OPW returned HTTP 503. This points downstream: the pipeline could not accept the batch in time. Unlike load shedding, a timeout also drops the unsent part of the batch and increments `component_discarded_events_total` with `intentional:false`.
+{{/is_alert}}
+{{#is_recovery}}`{{protocol.name}}` requests stopped timing out in pipeline `{{pipeline_name.name}}`.{{/is_recovery}}
+
+## Impact
+[Assess impact](${notebook_assessing_impact_url})
+
+## What to do
+[Open the runbook](${notebook_opw_request_admission_shedding_url})
+
+## Links
+- [Observability Pipelines dashboard](${op_dashboard_url})

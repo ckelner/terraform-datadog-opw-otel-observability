@@ -1,0 +1,17 @@
+{{#is_alert}}
+## What's happening?
+OPW `{{component_id.name}}` in pipeline `{{pipeline_name.name}}` is holding **{{value}}** of its concurrent request limit, averaged over the last 10 minutes. OPW 2.23.0 and later caps concurrent OTLP requests at 100 per pod by default. Nothing is failing yet: this is a leading indicator that the fleet is close to shedding load.
+{{/is_alert}}{{#is_warning}}
+## What's happening?
+OPW `{{component_id.name}}` in pipeline `{{pipeline_name.name}}` is holding **{{value}}** of its concurrent request limit, above the 60% warning threshold. The per-pod cap is 100 concurrent OTLP requests by default, and nothing is failing yet.
+{{/is_warning}}
+{{#is_recovery}}Request admission headroom recovered for `{{component_id.name}}` in pipeline `{{pipeline_name.name}}`.{{/is_recovery}}
+
+## Impact
+[Assess impact](${notebook_assessing_impact_url})
+
+## What to do
+[Open the runbook](${notebook_opw_request_admission_shedding_url})
+
+## Links
+- [Observability Pipelines dashboard](${op_dashboard_url})

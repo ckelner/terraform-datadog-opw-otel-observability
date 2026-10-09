@@ -1,0 +1,17 @@
+{{#is_alert}}
+## What's happening?
+The OPW source `{{component_id.name}}` in pipeline `{{pipeline_name.name}}` spent an average of **{{value}} seconds** blocked waiting for the pipeline to accept a batch over the last 10 minutes, above the 5 second threshold. This is the most direct measure of backpressure: the source cannot hand work off, so inbound requests queue behind it.
+{{/is_alert}}{{#is_warning}}
+## What's happening?
+The OPW source `{{component_id.name}}` in pipeline `{{pipeline_name.name}}` spent an average of **{{value}} seconds** blocked waiting for the pipeline to accept a batch over the last 10 minutes, above the 1 second warning threshold. Backpressure is building but the source is still keeping up.
+{{/is_warning}}
+{{#is_recovery}}Source send latency recovered for `{{component_id.name}}` in pipeline `{{pipeline_name.name}}`.{{/is_recovery}}
+
+## Impact
+[Assess impact](${notebook_assessing_impact_url})
+
+## What to do
+[Open the runbook](${notebook_opw_backpressure_triage_url})
+
+## Links
+- [Observability Pipelines dashboard](${op_dashboard_url})

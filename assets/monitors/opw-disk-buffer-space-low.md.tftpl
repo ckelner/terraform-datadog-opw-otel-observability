@@ -1,0 +1,17 @@
+{{#is_alert}}
+## What's happening?
+The OPW disk buffer volume on `{{host.name}}` in pipeline `{{pipeline_name.name}}` has only **{{value}}** of its capacity free. A buffer volume that reaches 100% causes partial writes that corrupt the buffer, after which the worker enters CrashLoopBackOff and recovery requires deleting the PVC. Act before it fills.
+{{/is_alert}}{{#is_warning}}
+## What's happening?
+The OPW disk buffer volume on `{{host.name}}` in pipeline `{{pipeline_name.name}}` has only **{{value}}** of its capacity free, below the 30% warning threshold. A volume that fills completely corrupts the buffer and forces a PVC delete to recover.
+{{/is_warning}}
+{{#is_recovery}}Free space on the OPW disk buffer volume recovered on `{{host.name}}` in pipeline `{{pipeline_name.name}}`.{{/is_recovery}}
+
+## Impact
+[Assess impact](${notebook_assessing_impact_url})
+
+## What to do
+[Open the runbook](${notebook_opw_backpressure_triage_url})
+
+## Links
+- [Observability Pipelines dashboard](${op_dashboard_url})

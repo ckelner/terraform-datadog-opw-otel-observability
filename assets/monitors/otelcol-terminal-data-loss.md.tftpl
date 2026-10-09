@@ -1,0 +1,14 @@
+{{#is_alert}}
+## What's happening?
+The Collector logged `Exporting failed. Dropping data.` **{{value}} times** during the last 15 minutes. This is unambiguous, permanent loss: retries were exhausted (`max_elapsed_time`, 300s by default) and the batch was discarded after dequeue, so nothing will resend it. There is no counter metric for this, and the log line with its `dropped_items` field is the only record of how much was lost.
+{{/is_alert}}
+{{#is_recovery}}The Collector stopped logging terminal export failures.{{/is_recovery}}
+
+## Impact
+[Assess impact](${notebook_assessing_impact_url})
+
+## What to do
+[Open the runbook](${notebook_otelcol_refusing_data_url})
+
+## Links
+- [Observability Pipelines dashboard](${op_dashboard_url})

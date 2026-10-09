@@ -1,0 +1,17 @@
+{{#is_alert}}
+## What's happening?
+Events reaching OPW source `{{component_id.name}}` in pipeline `{{pipeline_name.name}}` are **{{value}} seconds** older than their own timestamps, averaged over the last 10 minutes. Lag this large means data is piling up upstream of the worker: in a prior incident this signal went from 0.12s to 2,849s as backpressure built.
+{{/is_alert}}{{#is_warning}}
+## What's happening?
+Events reaching OPW source `{{component_id.name}}` in pipeline `{{pipeline_name.name}}` are **{{value}} seconds** older than their own timestamps, above the 10 second warning threshold. Delivery is slipping behind real time.
+{{/is_warning}}
+{{#is_recovery}}Source lag recovered for `{{component_id.name}}` in pipeline `{{pipeline_name.name}}`.{{/is_recovery}}
+
+## Impact
+[Assess impact](${notebook_assessing_impact_url})
+
+## What to do
+[Open the runbook](${notebook_opw_backpressure_triage_url})
+
+## Links
+- [Observability Pipelines dashboard](${op_dashboard_url})

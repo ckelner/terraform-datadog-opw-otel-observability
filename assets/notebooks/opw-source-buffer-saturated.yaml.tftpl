@@ -1,0 +1,227 @@
+name: "OPW/OTel Runbook | OPW source buffer is saturated"
+status: "published"
+time:
+  live_span: "1h"
+metadata:
+  is_template: false
+  take_snapshots: false
+  type: "runbook"
+template_variables:
+  - name: "pipeline_id"
+    prefix: "pipeline_id"
+    default: "*"
+  - name: "component_id"
+    prefix: "component_id"
+    default: "*"
+cells:
+  - definition:
+      type: "markdown"
+      text: |-
+        # Paging symptom: OPW source buffer is saturated
+
+        [Find the OPW buffer monitors](${app_url}/monitors/manage?q=tag%3A%22component%3Aopw%22&p=1)${optional_monitor_source_buffer}
+
+        Open [Assessing impact](${notebook_assessing_impact_url}) first to establish whether events are already being discarded.
+
+        The channel between an OPW source and the rest of the pipeline is nearly full. The source can only hand off events as fast as the pipeline drains them, so a full source buffer means the source is about to start blocking on every send.
+
+        ## Read the metric correctly
+
+        `pipelines.source_buffer_utilization_mean` is an absolute count of events sitting in the buffer. It is not a 0 to 1 ratio and it is not a percentage. A value of 4000 means four thousand events, and whether that is healthy depends entirely on the buffer's capacity.
+
+        Capacity is 1,000 events per vCPU allocated to the Worker, and it is reported by `pipelines.source_buffer_max_size_events`. A 4 vCPU Worker has a 4,000 event buffer, so a utilization of 4000 is completely full while on a 16 vCPU Worker the same number is a quarter full.
+
+        Always chart and alert on the ratio of `source_buffer_utilization_mean` to `source_buffer_max_size_events`. Reading the raw utilization value against a fixed threshold produces a monitor that fires at the wrong level on every Worker size you have not tuned it for.
+
+        Because capacity scales with vCPU, vertical scaling changes the denominator. Moving from 4 vCPU to 8 vCPU doubles the buffer, which halves the ratio without the pipeline getting any faster. That buys a few seconds of absorption and hides the symptom. It does not fix the drain rate.
+
+        ## A missing metric is a saturation signal
+
+        OPW stops emitting `source_buffer_utilization_mean` once the buffer is completely full. The exporter samples the channel and has nothing to report when the source is fully blocked.
+
+        This means a sudden absence of the metric on a host that was reporting it is evidence of total saturation, not evidence of a dead pod. There is a separate monitor for exactly this condition, and it uses no-data notification rather than a threshold. Before you go looking for a crashed Worker, check whether the pod is still alive and still receiving requests. A live pod that stopped reporting buffer utilization is the worst case on this page, not a gap in telemetry.
+
+        ## Step 1: Confirm the saturation
+  - definition:
+      type: "timeseries"
+      title: "Source buffer fill ratio by host and component"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+      requests:
+        - display_type: "line"
+          response_format: "timeseries"
+          formulas:
+            - alias: "fill ratio"
+              formula: "used / capacity"
+          queries:
+            - data_source: "metrics"
+              name: "used"
+              query: "avg:pipelines.source_buffer_utilization_mean{!component_id:_*,pipeline_id:$pipeline_id,component_id:$component_id} by {host,component_id}"
+            - data_source: "metrics"
+              name: "capacity"
+              query: "max:pipelines.source_buffer_max_size_events{!component_id:_*,pipeline_id:$pipeline_id,component_id:$component_id} by {host,component_id}"
+          style:
+            palette: "dog_classic"
+            line_type: "solid"
+            line_width: "normal"
+      yaxis:
+        include_zero: true
+        min: "0"
+        max: "1"
+        scale: "linear"
+  - definition:
+      type: "markdown"
+      text: |-
+        ### Interpret the fill ratio
+
+        The paging monitor warns at 0.7 and alerts at 0.9, evaluated on the minimum over ten minutes so that a brief spike does not page.
+
+        * One host saturated while its peers are idle is a load balancing problem, not a capacity problem. Check the service in front of the Workers for sticky connections or uneven session distribution.
+        * All hosts saturated together means the pipeline cannot drain at the current ingest rate. Continue to the next charts.
+        * A host whose series disappears from this chart is fully saturated. Treat it as the most severe case, not as a missing pod.
+
+        ## Step 2: Confirm the source is actually blocked
+  - definition:
+      type: "timeseries"
+      title: "Source send latency"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+      requests:
+        - display_type: "line"
+          response_format: "timeseries"
+          formulas:
+            - alias: "batch send latency"
+              formula: "batch"
+              number_format:
+                unit:
+                  type: "canonical_unit"
+                  unit_name: "second"
+            - alias: "send latency"
+              formula: "single"
+              number_format:
+                unit:
+                  type: "canonical_unit"
+                  unit_name: "second"
+          queries:
+            - data_source: "metrics"
+              name: "batch"
+              query: "avg:pipelines.source_send_batch_latency_seconds{!component_id:_*,pipeline_id:$pipeline_id,component_id:$component_id} by {component_id,host}"
+            - data_source: "metrics"
+              name: "single"
+              query: "avg:pipelines.source_send_latency_seconds{!component_id:_*,pipeline_id:$pipeline_id,component_id:$component_id} by {component_id,host}"
+          style:
+            palette: "warm"
+            line_type: "solid"
+            line_width: "normal"
+  - definition:
+      type: "markdown"
+      text: |-
+        ### Why this chart is the confirmation
+
+        Source send latency is the time the source spends blocked waiting for the pipeline to accept a batch. It is the most direct measurement of backpressure OPW produces, because it measures the wait itself rather than a side effect of it.
+
+        A rising fill ratio with flat send latency means the buffer is absorbing a burst and handing it off fine. A rising fill ratio with rising send latency means the source is being held back, and the clock on the upstream client's own timeout has started.
+
+        The paging monitor on this metric warns at 1 second and alerts at 5 seconds.
+
+        ## Step 3: Find where the drain is blocked
+  - definition:
+      type: "timeseries"
+      title: "Destination buffer fill ratio"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+      requests:
+        - display_type: "line"
+          response_format: "timeseries"
+          formulas:
+            - alias: "fill ratio"
+              formula: "size / capacity"
+          queries:
+            - data_source: "metrics"
+              name: "size"
+              query: "avg:pipelines.buffer_size_bytes{pipeline_id:$pipeline_id} by {component_id,buffer_type}"
+            - data_source: "metrics"
+              name: "capacity"
+              query: "max:pipelines.buffer_max_size_bytes{pipeline_id:$pipeline_id} by {component_id,buffer_type}"
+          style:
+            palette: "cool"
+            line_type: "solid"
+            line_width: "normal"
+      yaxis:
+        include_zero: true
+        min: "0"
+        scale: "linear"
+  - definition:
+      type: "markdown"
+      text: |-
+        ### Interpret the destination buffer
+
+        This chart uses `pipelines.buffer_size_bytes` and `pipelines.buffer_max_size_bytes`. The older byte-size and event-count buffer gauges were removed in OPW 2.22.0, so any dashboard or monitor still referencing them returns nothing on a current Worker.
+
+        * Destination buffer filling at the same time as the source buffer means the sink cannot deliver. The destination is the cause and the source buffer is just the last thing to notice.
+        * Destination buffer near empty while the source buffer is full is the more confusing case. Events are not reaching the buffer at all, which points at a transform in the middle of the pipeline or at the buffer write path itself rather than at the destination.
+
+        ## Step 4: Check whether events are already being lost
+  - definition:
+      type: "timeseries"
+      title: "Unintentionally discarded events"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+        - "sum"
+      requests:
+        - display_type: "bars"
+          response_format: "timeseries"
+          formulas:
+            - alias: "discarded"
+              formula: "discarded"
+          queries:
+            - data_source: "metrics"
+              name: "discarded"
+              query: "sum:pipelines.component_discarded_events_total{!component_id:_*,pipeline_id:$pipeline_id,component_id:$component_id,intentional:false} by {component_id,host}.as_count()"
+          style:
+            palette: "warm"
+            line_type: "solid"
+            line_width: "normal"
+  - definition:
+      type: "markdown"
+      text: |-
+        ### Interpret discards
+
+        Discards here mean the source gave up on a send that was already in progress. The counter has no reason tag, so it cannot distinguish a client that disconnected from a pipeline that stalled. Correlate the timestamps with the Worker log line `Source send interrupted mid-flight; pipeline may be overloaded or shutting down.` before attributing a discard to backpressure.
+
+        ## Mitigation
+
+        1. Reduce what the pipeline has to do per event before you add capacity. Move filter and sample processors as early as possible, and cut Sensitive Data Scanner rule count or complexity if an SDS processor sits on the hot path.
+        2. Scale the Worker fleet out, not up. More pods with fewer cores each gives you more parallel pipelines and more total buffer, and it spreads the load across more destination connections. Scaling a single pod up only widens the buffer in front of the same bottleneck.
+        3. Confirm the load balancer in front of the Workers is spreading connections evenly. Long-lived gRPC connections pin to one pod and will saturate it while its peers sit idle.
+        4. Fix the destination if the destination buffer is also filling. Nothing you do at the source will help while the sink cannot deliver.
+
+        Do not raise Worker vCPU purely to grow the buffer. It changes the denominator on this page's ratio and buys seconds, not a fix.

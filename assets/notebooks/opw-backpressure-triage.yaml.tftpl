@@ -1,0 +1,543 @@
+name: "OPW/OTel Runbook | OPW backpressure triage"
+status: "published"
+time:
+  live_span: "1h"
+metadata:
+  is_template: false
+  take_snapshots: false
+  type: "runbook"
+template_variables:
+  - name: "pipeline_id"
+    prefix: "pipeline_id"
+    default: "*"
+  - name: "component_id"
+    prefix: "component_id"
+    default: "*"
+cells:
+  - definition:
+      type: "markdown"
+      text: |-
+        # Paging symptom: OPW backpressure triage
+
+        * [Open the Observability Pipelines dashboard](${op_dashboard_url})
+        * [Find the OPW monitors](${app_url}/monitors/manage?q=tag%3A%22symptom%3Abackpressure%22&p=1)${optional_monitor_backpressure}
+
+        Open [Assessing impact](${notebook_assessing_impact_url}) first to establish whether data is still buffered or already lost, and how much runway is left.
+
+        ## Work bottom-up
+
+        Backpressure originates at the destination and surfaces upstream. When BYOC slows down, OPW's sink stops draining, OPW's buffers fill, OPW's sources block, the Collector's exporter queue backs up, and the application finally sees an error. Every layer above the real fault reports a symptom that looks exactly like a fault of its own.
+
+        Starting at the application and working down means investigating three symptoms before reaching the cause. Start at the destination and work up instead.
+
+        | Step | Layer | Question |
+        |-|-|-|
+        | 1 | BYOC/CloudPrem destination | Is it rejecting writes or acknowledging them slowly? |
+        | 2 | Observability Pipelines Worker | Is the pipeline blocked, and is request admission shedding? |
+        | 3 | OpenTelemetry Collector | Is data being refused, queued, or lost? |
+
+        Stop at the first layer showing a real fault. Everything above it is downstream-caused and recovers on its own once the fault clears.
+
+        ## Step 1: Destination
+
+        If the sink cannot deliver, nothing you change in OPW or the Collector will help.
+  - definition:
+      type: "timeseries"
+      title: "Destination buffer fill ratio"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+      requests:
+        - display_type: "line"
+          response_format: "timeseries"
+          formulas:
+            - alias: "fill ratio"
+              formula: "size / capacity"
+          queries:
+            - data_source: "metrics"
+              name: "size"
+              query: "avg:pipelines.buffer_size_bytes{pipeline_id:$pipeline_id} by {component_id,buffer_type}"
+            - data_source: "metrics"
+              name: "capacity"
+              query: "max:pipelines.buffer_max_size_bytes{pipeline_id:$pipeline_id} by {component_id,buffer_type}"
+          style:
+            palette: "cool"
+            line_type: "solid"
+            line_width: "normal"
+      yaxis:
+        include_zero: true
+        min: "0"
+        scale: "linear"
+  - definition:
+      type: "markdown"
+      text: ""
+  - definition:
+      type: "timeseries"
+      title: "Sink errors"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+        - "sum"
+      requests:
+        - display_type: "bars"
+          response_format: "timeseries"
+          formulas:
+            - alias: "sink errors"
+              formula: "errors"
+          queries:
+            - data_source: "metrics"
+              name: "errors"
+              query: "sum:pipelines.component_errors_total{!component_id:_*,pipeline_id:$pipeline_id,component_kind:sink} by {component_id}.as_rate()"
+          style:
+            palette: "warm"
+            line_type: "solid"
+            line_width: "normal"
+  - definition:
+      type: "markdown"
+      text: |-
+        ### Interpret the destination
+
+        * Sink errors rising is the clearest possible answer: the destination is rejecting or failing writes. Fix that and stop here. Check CloudPrem indexer health, object storage availability, metastore latency, and any authentication or certificate expiry on the path.
+        * Destination buffer filling with no sink errors means writes are succeeding but too slowly. The destination is accepting data at less than the arrival rate. Look at indexer capacity and at the size and shape of what OPW is sending.
+        * Destination buffer near zero with no errors does not clear the destination. It can also mean events are never reaching the buffer, which is covered in step 2.
+
+        ## Step 2: Observability Pipelines Worker
+
+        The most direct measure of a blocked pipeline is how long the source spends waiting to hand off a batch.
+  - definition:
+      type: "timeseries"
+      title: "Source send latency"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+      requests:
+        - display_type: "line"
+          response_format: "timeseries"
+          formulas:
+            - alias: "batch send latency"
+              formula: "batch"
+              number_format:
+                unit:
+                  type: "canonical_unit"
+                  unit_name: "second"
+            - alias: "send latency"
+              formula: "single"
+              number_format:
+                unit:
+                  type: "canonical_unit"
+                  unit_name: "second"
+          queries:
+            - data_source: "metrics"
+              name: "batch"
+              query: "avg:pipelines.source_send_batch_latency_seconds{!component_id:_*,pipeline_id:$pipeline_id,component_id:$component_id} by {component_id}"
+            - data_source: "metrics"
+              name: "single"
+              query: "avg:pipelines.source_send_latency_seconds{!component_id:_*,pipeline_id:$pipeline_id,component_id:$component_id} by {component_id}"
+          style:
+            palette: "warm"
+            line_type: "solid"
+            line_width: "normal"
+  - definition:
+      type: "markdown"
+      text: ""
+  - definition:
+      type: "timeseries"
+      title: "Buffer write duration"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+      requests:
+        - display_type: "line"
+          response_format: "timeseries"
+          formulas:
+            - alias: "buffer send duration"
+              formula: "duration"
+              number_format:
+                unit:
+                  type: "canonical_unit"
+                  unit_name: "second"
+          queries:
+            - data_source: "metrics"
+              name: "duration"
+              query: "avg:pipelines.buffer_send_duration_seconds{pipeline_id:$pipeline_id} by {component_id,host}"
+          style:
+            palette: "orange"
+            line_type: "solid"
+            line_width: "normal"
+  - definition:
+      type: "markdown"
+      text: ""
+  - definition:
+      type: "timeseries"
+      title: "Source lag time"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+      requests:
+        - display_type: "line"
+          response_format: "timeseries"
+          formulas:
+            - alias: "lag"
+              formula: "lag"
+              number_format:
+                unit:
+                  type: "canonical_unit"
+                  unit_name: "second"
+          queries:
+            - data_source: "metrics"
+              name: "lag"
+              query: "avg:pipelines.source_lag_time_seconds{!component_id:_*,pipeline_id:$pipeline_id,component_id:$component_id} by {component_id}"
+          style:
+            palette: "dog_classic"
+            line_type: "solid"
+            line_width: "normal"
+  - definition:
+      type: "markdown"
+      text: ""
+  - definition:
+      type: "timeseries"
+      title: "Source buffer fill ratio"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+      requests:
+        - display_type: "line"
+          response_format: "timeseries"
+          formulas:
+            - alias: "fill ratio"
+              formula: "used / capacity"
+          queries:
+            - data_source: "metrics"
+              name: "used"
+              query: "avg:pipelines.source_buffer_utilization_mean{!component_id:_*,pipeline_id:$pipeline_id,component_id:$component_id} by {host,component_id}"
+            - data_source: "metrics"
+              name: "capacity"
+              query: "max:pipelines.source_buffer_max_size_events{!component_id:_*,pipeline_id:$pipeline_id,component_id:$component_id} by {host,component_id}"
+          style:
+            palette: "dog_classic"
+            line_type: "solid"
+            line_width: "normal"
+      yaxis:
+        include_zero: true
+        min: "0"
+        max: "1"
+        scale: "linear"
+  - definition:
+      type: "markdown"
+      text: ""
+  - definition:
+      type: "timeseries"
+      title: "Request admission saturation and rejections"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+        - "sum"
+      requests:
+        - display_type: "line"
+          response_format: "timeseries"
+          formulas:
+            - alias: "admission saturation"
+              formula: "active / limit"
+          queries:
+            - data_source: "metrics"
+              name: "active"
+              query: "avg:pipelines.component_request_active{!component_id:_*,pipeline_id:$pipeline_id,component_id:$component_id} by {component_id}"
+            - data_source: "metrics"
+              name: "limit"
+              query: "max:pipelines.component_request_concurrency_limit{!component_id:_*,pipeline_id:$pipeline_id,component_id:$component_id} by {component_id}"
+          style:
+            palette: "dog_classic"
+            line_type: "solid"
+            line_width: "normal"
+        - display_type: "bars"
+          response_format: "timeseries"
+          formulas:
+            - alias: "load shed"
+              formula: "shed"
+            - alias: "timed out"
+              formula: "timeouts"
+          queries:
+            - data_source: "metrics"
+              name: "shed"
+              query: "sum:pipelines.component_load_shed_requests_total{!component_id:_*,pipeline_id:$pipeline_id,component_id:$component_id} by {protocol}.as_rate()"
+            - data_source: "metrics"
+              name: "timeouts"
+              query: "sum:pipelines.component_timed_out_requests_total{!component_id:_*,pipeline_id:$pipeline_id,component_id:$component_id} by {protocol}.as_rate()"
+          style:
+            palette: "warm"
+            line_type: "solid"
+            line_width: "normal"
+  - definition:
+      type: "markdown"
+      text: |-
+        ### Interpret the Worker
+
+        Read these four signals together. Each one on its own is ambiguous.
+
+        Source send latency rising means the source is blocked waiting for pipeline capacity. This is the primary confirmation that OPW is backed up rather than merely busy. The paging monitor warns at 1 second and alerts at 5 seconds.
+
+        Buffer write duration rising means the time to write a payload into the destination buffer has grown. On a disk buffer this usually means the volume is slow, nearly full, or contended. The paging monitor warns at 0.1 seconds and alerts at 0.5 seconds. Buffer write duration rising while source send latency stays flat points at the buffer volume itself rather than at the destination.
+
+        Source lag time measures the delay between an event's own timestamp and the moment OPW received it. Rising lag with flat send latency means the backlog is upstream of OPW, in the Collector or in the application. Rising lag together with rising send latency means OPW is the one adding the delay. The paging monitor warns at 10 seconds and alerts at 60 seconds.
+
+        Source buffer fill ratio confirms where the block is. Remember that `source_buffer_utilization_mean` is an absolute event count, not a ratio, and that capacity is 1,000 events per vCPU. See [OPW source buffer is saturated](${notebook_opw_source_buffer_saturated_url}) for the full treatment, including why the metric disappearing is itself a saturation signal.
+
+        Admission saturation, load shedding, and request timeouts show how the Worker is pushing back on its clients. Timeouts dominating means the pipeline could not drain fast enough; shedding dominating means the concurrency bound was hit. See [OPW request admission is shedding or timing out](${notebook_opw_request_admission_shedding_url}).
+
+        ## Step 3: OpenTelemetry Collector
+
+        By this point you know whether OPW is the fault or a victim. These charts show how the Collector is reacting.
+  - definition:
+      type: "timeseries"
+      title: "Exporter queue fill ratio by exporter"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+      requests:
+        - display_type: "line"
+          response_format: "timeseries"
+          formulas:
+            - alias: "queue fill ratio"
+              formula: "size / capacity"
+          queries:
+            - data_source: "metrics"
+              name: "size"
+              query: "avg:otelcol_exporter_queue_size{*} by {exporter}"
+            - data_source: "metrics"
+              name: "capacity"
+              query: "max:otelcol_exporter_queue_capacity{*} by {exporter}"
+          style:
+            palette: "dog_classic"
+            line_type: "solid"
+            line_width: "normal"
+      yaxis:
+        include_zero: true
+        min: "0"
+        max: "1"
+        scale: "linear"
+  - definition:
+      type: "markdown"
+      text: ""
+  - definition:
+      type: "timeseries"
+      title: "Collector receiver refusals"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+        - "sum"
+      requests:
+        - display_type: "bars"
+          response_format: "timeseries"
+          formulas:
+            - alias: "receiver refused"
+              formula: "refused"
+          queries:
+            - data_source: "metrics"
+              name: "refused"
+              query: "sum:otelcol_receiver_refused_log_records{*} by {${collector_group}}.as_rate()"
+          style:
+            palette: "warm"
+            line_type: "solid"
+            line_width: "normal"
+  - definition:
+      type: "markdown"
+      text: ""
+  - definition:
+      type: "timeseries"
+      title: "BYOC exporter failures"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+        - "sum"
+      requests:
+        - display_type: "bars"
+          response_format: "timeseries"
+          formulas:
+            - alias: "send failed"
+              formula: "send_failed"
+            - alias: "enqueue failed"
+              formula: "enqueue_failed"
+          queries:
+            - data_source: "metrics"
+              name: "send_failed"
+              query: "sum:otelcol_exporter_send_failed_log_records{exporter:${byoc_exporter}} by {${collector_group}}.as_rate()"
+            - data_source: "metrics"
+              name: "enqueue_failed"
+              query: "sum:otelcol_exporter_enqueue_failed_log_records{exporter:${byoc_exporter}} by {${collector_group}}.as_rate()"
+          style:
+            palette: "orange"
+            line_type: "solid"
+            line_width: "normal"
+  - definition:
+      type: "markdown"
+      text: |-
+        ### Interpret the Collector
+
+        The queue chart is grouped by `exporter` on purpose. If the BYOC exporter is the one filling, the Collector is reacting to OPW and the fix is downstream. If a different exporter is filling, the BYOC path is fine and this Collector has an unrelated problem that is refusing BYOC data as a side effect, because the `memory_limiter` processor works on process-wide memory and cannot tell destinations apart.
+
+        Send failures against the BYOC exporter are the Collector's view of OPW rejecting or timing out requests. They should line up in time with the admission rejections in step 2. Enqueue failures mean the sending queue was already full, and that data was dropped without ever getting a retry.
+
+        For the full refusal chain, memory limiter configuration, and loss reconstruction, open [OpenTelemetry Collector is refusing data](${notebook_otelcol_refusing_data_url}).
+
+        ## Signals that will look healthy and should not reassure you
+
+        Three signals routinely mislead during this exact failure.
+
+        `pipelines.utilization` is the most dangerous one. It is emitted for transforms and sinks only, never for sources, so the component you most want to measure does not report it at all. Worse, a transform blocked on a full downstream buffer reports utilization falling toward zero, because it is idle while it waits. A dashboard built on utilization shows a pipeline going quiet at precisely the moment it is most stuck. Do not treat it as a backpressure signal.
+
+        Worker CPU is the second. A blocked pipeline is not doing work, so CPU falls during an incident rather than rising. If the Worker's HPA targets CPU, it will scale the fleet down in the middle of a backpressure event, remove admission capacity and buffer capacity at the same time, and make the incident worse. Check the replica count trend alongside CPU before concluding the fleet is oversized.
+
+        Destination buffer fullness is the third. It can sit near zero throughout an incident when the bottleneck is the write path into the buffer rather than the drain out of it. An empty buffer proves nothing on its own; pair it with buffer write duration.
+  - definition:
+      type: "timeseries"
+      title: "Worker CPU usage against allocated cores"
+      title_align: "left"
+      title_size: "16"
+      show_legend: true
+      legend_layout: "auto"
+      legend_columns:
+        - "avg"
+        - "min"
+        - "max"
+        - "value"
+      requests:
+        - display_type: "line"
+          response_format: "timeseries"
+          formulas:
+            - alias: "cores used"
+              formula: "used"
+            - alias: "cores allocated"
+              formula: "allocated"
+          queries:
+            - data_source: "metrics"
+              name: "used"
+              query: "sum:pipelines.cpu_usage_seconds_total{pipeline_id:$pipeline_id} by {host}.as_rate()"
+            - data_source: "metrics"
+              name: "allocated"
+              query: "max:pipelines.cpu_max_cores{pipeline_id:$pipeline_id} by {host}"
+          style:
+            palette: "cool"
+            line_type: "solid"
+            line_width: "normal"
+      yaxis:
+        include_zero: true
+        scale: "linear"
+  - definition:
+      type: "markdown"
+      text: |-
+        ### Read CPU as a counter-indicator
+
+        `pipelines.cpu_usage_seconds_total` is a count and needs `.as_rate()` to read as cores. Compare it against `pipelines.cpu_max_cores`.
+
+        CPU falling while send latency rises is the signature of a blocked pipeline. CPU pinned at the allocated core count while send latency rises is a genuinely CPU-bound Worker, which is a different problem with a different fix: reduce per-event work, or add pods.
+
+        ## Attribute discards to backpressure
+
+        `pipelines.component_discarded_events_total` carries no reason tag. The metric alone cannot tell you whether an event was discarded because the pipeline stalled or because the client went away. The only way to attribute a discard to backpressure is to correlate the counter with the Worker log line below.
+  - definition:
+      type: "list_stream"
+      title: "OPW worker error patterns"
+      requests:
+        - response_format: "event_list"
+          columns:
+            - field: "status_line"
+              width: "auto"
+            - field: "matches"
+              width: "auto"
+            - field: "volume"
+              width: "auto"
+            - field: "message"
+              width: "auto"
+          query:
+            data_source: "logs_pattern_stream"
+            query_string: "source:op_worker pipeline_id:$pipeline_id.value status:error"
+            indexes: []
+            group_by: []
+            clustering_pattern_field_path: "message"
+            storage: "hot"
+  - definition:
+      type: "markdown"
+      text: |-
+        ### The log line that confirms backpressure
+
+        Look for this pattern in the stream above:
+
+        ```
+        Source send interrupted mid-flight; pipeline may be overloaded or shutting down.
+        ```
+
+        A discard counted within the same window as this log line is a backpressure discard. The same counter incrementing with no matching log line points at a client that disconnected or cancelled, which is a different investigation and often not a loss at all.
+
+        Rule out the mundane cause before escalating. This line is also written during a normal Worker shutdown, so check pod restarts and rollout timestamps against the log timestamps first.
+
+        ## Mitigation
+
+        Apply the fix at the layer where you found the fault, not at the layer that paged.
+
+        1. Destination at fault: restore BYOC write capacity. Everything upstream drains on its own once the sink accepts data at the arrival rate.
+        2. OPW at fault, pipeline saturated: cut per-event work first by moving filter and sample processors earlier and reducing Sensitive Data Scanner complexity, then scale the Worker fleet out as more pods with fewer cores each.
+        3. OPW at fault, admission bound reached with a healthy pipeline: raise the concurrency and timeout limits deliberately, and raise Worker memory alongside the concurrency bound.
+        4. Collector at fault: isolate the destination that is consuming the heap, and confirm the application retries on 503.
+        5. Running out of runway regardless of cause: expand the disk buffer volume to buy investigation time, and reduce ingest at the source. Do not scale the destination up blindly during an active incident.
+
+        Before closing, confirm that source send latency and source lag have returned to baseline, that buffers are draining rather than merely stable, and that no new unintentional discards have been recorded for a full monitor window.

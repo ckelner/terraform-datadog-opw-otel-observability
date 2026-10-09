@@ -1,0 +1,14 @@
+{{#is_alert}}
+## What's happening?
+`otelcol_process_uptime` stopped reporting for this Collector group, so every other Collector monitor in this module is blind for that group. Either the Collector is dead, or it is still running with its self-telemetry export broken. Confirm which before treating the absence of other alerts as a healthy pipeline.
+{{/is_alert}}
+{{#is_recovery}}Collector self-telemetry is reporting again.{{/is_recovery}}
+
+## Impact
+[Assess impact](${notebook_assessing_impact_url})
+
+## What to do
+[Open the runbook](${notebook_otelcol_refusing_data_url})
+
+## Links
+- [Observability Pipelines dashboard](${op_dashboard_url})

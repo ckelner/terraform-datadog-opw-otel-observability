@@ -1,0 +1,70 @@
+name: "OPW/OTel Runbooks | Start here"
+status: "published"
+time:
+  live_span: "1h"
+metadata:
+  is_template: false
+  take_snapshots: false
+  type: "runbook"
+template_variables:
+  - name: "pipeline_id"
+    prefix: "pipeline_id"
+    default: "*"
+  - name: "component_id"
+    prefix: "component_id"
+    default: "*"
+cells:
+  - definition:
+      type: "markdown"
+      text: |-
+        # OPW and OpenTelemetry Collector backpressure runbooks
+
+        * [Open the Observability Pipelines dashboard](${op_dashboard_url})
+        * [Find every monitor in this set](${app_url}/monitors/manage?q=tag%3A%22managed-by%3Aterraform-opw-otel%22&p=1)
+
+        ## What to do first
+
+        1. Open [Assessing impact](${notebook_assessing_impact_url}). Decide whether logs are still buffered or already lost, and how much runway is left before buffers fill.
+        2. Open [OPW backpressure triage](${notebook_opw_backpressure_triage_url}) and walk the three layers bottom-up, starting at the destination. This is the entry point for every backpressure page.
+        3. Drop into the specific runbook for whichever layer the triage identified.
+        4. Apply a mitigation only once the investigation has named a cause. Scaling the layer that paged, rather than the layer that failed, is the most common wasted action in these incidents.
+
+        ## Runbooks
+
+        | Symptom | Runbook |
+        |-|-|
+        | Need to know whether data is actually being lost | [Assessing impact](${notebook_assessing_impact_url}) |
+        | Source send latency or lag is high, buffers are filling, cause unknown | [OPW backpressure triage](${notebook_opw_backpressure_triage_url}) |
+        | OPW source buffer is nearly full, or stopped reporting | [OPW source buffer is saturated](${notebook_opw_source_buffer_saturated_url}) |
+        | OPW is returning 429 or 503, or admission is saturated | [OPW request admission is shedding or timing out](${notebook_opw_request_admission_shedding_url}) |
+        | Collector memory_limiter or receiver is refusing log records | [OpenTelemetry Collector is refusing data](${notebook_otelcol_refusing_data_url}) |
+
+        ## Architecture
+
+        ```
+        application -> OpenTelemetry Collector -> Observability Pipelines Worker -> BYOC/CloudPrem
+        ```
+
+        Each layer holds data differently, and each one pushes back differently when the next layer slows down.
+
+        The first hop depends on how logs reach the Collector, and the two common shapes behave completely differently under pressure.
+
+        **Pushed over OTLP.** The application's SDK holds a small in-process queue that is usually lost on restart. Here a 429 or 503 from the Collector reaches the application, and whether it costs data depends entirely on whether the application retries.
+
+        **Tailed from files.** In Kubernetes the usual shape is the application writing to stdout and stderr, the container runtime writing that to a file under `/var/log/pods/`, and the Collector tailing those files with the `filelog` receiver. Nothing propagates back to the application at all. It keeps writing, the runtime keeps writing, and the Collector simply stops advancing its read offset. The filesystem is the buffer, and its depth is the kubelet rotation policy rather than any Collector setting: `containerLogMaxSize` defaults to 10Mi and `containerLogMaxFiles` to 5, so roughly 50 MiB per container of runway. Data is lost only when rotation outruns the reader, meaning a file is rotated away before the Collector finishes it. An application writing its own files to a shared volume behaves the same way, except the rotation policy is its own rather than the kubelet's.
+
+        Which shape you are running changes what the refusal metrics mean and which Collector settings matter. The Collector runbook covers both.
+
+        The OpenTelemetry Collector buffers in the exporter sending queue, sized by `otelcol_exporter_queue_capacity`. When the queue fills, new batches cannot be enqueued and unexported data accumulates in the Go heap. The `memory_limiter` processor then refuses new data process-wide, which propagates back to the receiver and returns HTTP 503 to the application. The limiter reads total process memory and cannot tell destinations apart, so one slow destination refuses data belonging to all of them.
+
+        The Observability Pipelines Worker buffers in two places. In front of the pipeline, each source has a channel sized at 1,000 events per vCPU, measured by `pipelines.source_buffer_utilization_mean` against `pipelines.source_buffer_max_size_events`. Behind the pipeline, each sink has a memory or disk buffer measured by `pipelines.buffer_size_bytes` against `pipelines.buffer_max_size_bytes`, with the disk buffer backed by a volume tracked through `pipelines.data_dir_available_bytes`. OPW pushes back on its clients through bounded request admission: 100 concurrent requests and a 30 second processing deadline per pod by default, returning 429 when it sheds and 503 when it times out.
+
+        BYOC/CloudPrem is the destination. It does not buffer on behalf of the pipeline. When it rejects writes or acknowledges them slowly, that pressure travels straight back up.
+
+        ## How backpressure propagates
+
+        Pressure always moves upstream from the destination. A slow BYOC write path stops OPW's sink draining, which fills OPW's destination buffer, which blocks the pipeline, which fills the source channel, which makes OPW's sources block on every send and eventually shed or time out requests. The Collector sees those rejections as export failures, its sending queue fills, its heap grows, the memory limiter starts refusing, and the application finally gets an error.
+
+        Because of that ordering, every layer above the real fault reports a symptom indistinguishable from a fault of its own. Investigating top-down means working through three convincing false leads before reaching the cause, which is why the triage runbook works bottom-up.
+
+        Two signals are routinely misread during this sequence. `pipelines.utilization` is emitted for transforms and sinks only, never for sources, and a transform blocked on a full downstream buffer reports it falling toward zero. Worker CPU falls during a backpressure event rather than rising, because a blocked pipeline is not doing work, so a CPU-target HPA can scale the fleet down mid-incident. Neither signal should be used to rule backpressure out.

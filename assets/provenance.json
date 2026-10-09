@@ -1,0 +1,7 @@
+{
+  "source_bundle_version": "2026.10.08.1",
+  "imported_on": "2026-10-08",
+  "monitor_count": 16,
+  "notebook_count": 6,
+  "note": "Sibling of terraform-datadog-byoc-observability. Covers the OpenTelemetry Collector tier and the OPW backpressure signals that module does not ship. Markdown and JSON templates here are authoritative for this module."
+}

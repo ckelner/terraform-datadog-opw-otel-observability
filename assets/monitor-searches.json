@@ -1,0 +1,6 @@
+{
+  "opw_backpressure_triage": "monitor.opw-source-send-latency-high",
+  "opw_source_buffer_saturated": "monitor.opw-source-buffer-saturated",
+  "opw_request_admission_shedding": "monitor.opw-requests-load-shed",
+  "otelcol_refusing_data": "monitor.otelcol-memory-limiter-refusing"
+}

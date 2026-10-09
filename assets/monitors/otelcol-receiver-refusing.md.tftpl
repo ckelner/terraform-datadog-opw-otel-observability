@@ -1,0 +1,14 @@
+{{#is_alert}}
+## What's happening?
+Collector receiver `{{receiver.name}}` refused **{{value}} log records** during the last 15 minutes, so clients are getting HTTP 503 or gRPC UNAVAILABLE back. This signal is also shared across destinations: the receiver sits upstream of the exporter fan-out, so it cannot attribute the pressure to the BYOC path on its own. It only fires for pushed input. A `filelog` receiver has no caller to refuse, so this metric stays flat on file-tailing pipelines even under heavy pressure.
+{{/is_alert}}
+{{#is_recovery}}Receiver `{{receiver.name}}` stopped refusing log records.{{/is_recovery}}
+
+## Impact
+[Assess impact](${notebook_assessing_impact_url})
+
+## What to do
+[Open the runbook](${notebook_otelcol_refusing_data_url})
+
+## Links
+- [Observability Pipelines dashboard](${op_dashboard_url})
