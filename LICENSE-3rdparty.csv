@@ -1,0 +1,3 @@
+Component,Origin,License,Copyright
+DataDog/datadog Terraform provider 4.21.0,https://github.com/DataDog/terraform-provider-datadog,MPL-2.0,"Datadog, Inc. and contributors"
+Mastercard/restapi Terraform provider 3.0.0,https://github.com/Mastercard/terraform-provider-restapi,Apache-2.0,"Mastercard and contributors"

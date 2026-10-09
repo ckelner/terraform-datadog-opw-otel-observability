@@ -1,0 +1,10 @@
+terraform-datadog-opw-otel-observability
+Copyright 2026-Present Chris Kelner
+
+This is an unofficial, personally maintained project. It is not a Datadog
+product and is not published, endorsed, or supported by Datadog, Inc.
+
+Licensed under the Apache License, Version 2.0. See LICENSE.
+
+Third-party Terraform providers used by this module are inventoried in
+LICENSE-3rdparty.csv.
