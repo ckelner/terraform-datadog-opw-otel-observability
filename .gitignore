@@ -1,0 +1,14 @@
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+*.tfvars.json
+crash.log
+__pycache__/
+.validation/
+.env
+.idea/
+.DS_Store
+# Retired workflow artifacts may contain private organization data and plans.
+.export/
