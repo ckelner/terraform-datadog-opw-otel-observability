@@ -93,7 +93,7 @@ Monitors group by `pipeline_id` and scope by the `pipeline_name` tag (OPW 2.18 a
 
 One monitor covers every environment, and paging recipients are gated per alerting group on the `pipeline_name` tag. There is no `env` tag on OPW metrics; `pipeline_name` is the only thing that knows which environment a pipeline belongs to, so the name has to carry the marker.
 
-Matching is **substring based**, which means an include list alone is not sufficient: `prod` is a substring of both `pre-prod` and `non-prod`. Hyphens do not help either, since `mail-pre-prod-byoc` contains `-prod-`. The exclude list exists for exactly this.
+Matching is **substring based**, which means an include list alone is not sufficient: `prod` is a substring of both `pre-prod` and `non-prod`. Hyphens do not help either, since `app-pre-prod-byoc` contains `-prod-`. The exclude list exists for exactly this.
 
 | Config | Rendered gate | Behaviour |
 |---|---|---|
