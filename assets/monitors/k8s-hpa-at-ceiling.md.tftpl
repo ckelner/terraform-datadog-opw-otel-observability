@@ -1,0 +1,28 @@
+{{#is_alert}}
+## What's happening?
+The autoscaler `{{${hpa_group}.name}}` has wanted at least as many replicas as its configured maximum for 30 minutes. It is asking for capacity it cannot have. Load shedding, source blocking and client-side data loss follow from this state, and none of them resolve until the ceiling moves.
+{{/is_alert}}{{#is_warning}}
+## What's happening?
+The autoscaler `{{${hpa_group}.name}}` is within 10% of its replica ceiling. It still has room, but not much.
+{{/is_warning}}
+{{#is_recovery}}Autoscaler `{{${hpa_group}.name}}` is no longer at its replica ceiling.{{/is_recovery}}
+
+## Why this monitor exists
+No OPW or OpenTelemetry Collector metric can see this condition. Every pipeline monitor in this module reports symptoms that appear *downstream* of a fleet that cannot grow: saturated request admission, load shedding, source blocking, discards. All of them can fire for seven days while the actual remedy is a single number in a Helm value.
+
+A fleet pinned at its ceiling with CPU above the autoscaler's target is also indistinguishable, from the pipeline's own telemetry, from a fleet that is correctly sized and simply busy.
+
+## Impact
+[Assess impact](${notebook_assessing_impact_url})
+
+## What to do
+1. Confirm CPU is above the autoscaler's target. If it is, the ceiling is the binding constraint and raising `maxReplicas` is the immediate remedy.
+2. Confirm it is the ceiling and not the scaling signal. If CPU sits *below* target while the pipeline is shedding, the autoscaler has no reason to act and raising the ceiling changes nothing; the scaling metric is the problem.
+3. Before setting a new ceiling, size it from measured CPU per event rather than from throughput:
+   `pods = (events per second x pod CPU seconds per event) / (vCPU per pod x target utilisation)`
+4. Check what scale-in will leave behind. Ordinals with retained volume claims persist after the fleet shrinks.
+
+[Open the runbook](${notebook_opw_backpressure_triage_url})
+
+## Links
+- [Observability Pipelines dashboard](${op_dashboard_url})

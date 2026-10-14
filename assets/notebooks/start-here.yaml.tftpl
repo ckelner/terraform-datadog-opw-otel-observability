@@ -67,4 +67,25 @@ cells:
 
         Because of that ordering, every layer above the real fault reports a symptom indistinguishable from a fault of its own. Investigating top-down means working through three convincing false leads before reaching the cause, which is why the triage runbook works bottom-up.
 
-        Two signals are routinely misread during this sequence. `pipelines.utilization` is emitted for transforms and sinks only, never for sources, and a transform blocked on a full downstream buffer reports it falling toward zero. Worker CPU falls during a backpressure event rather than rising, because a blocked pipeline is not doing work, so a CPU-target HPA can scale the fleet down mid-incident. Neither signal should be used to rule backpressure out.
+        Two signals are routinely misread during this sequence. `pipelines.utilization` is emitted for transforms and sinks only, never for sources, and a transform blocked on a full downstream buffer reports it falling toward zero. It cannot be used to rule backpressure out.
+
+        Worker CPU is the second, and it points in opposite directions depending on the cause, which makes it a useful fork rather than a dead end:
+
+        - **CPU falls while the pipeline blocks.** The constraint is downstream I/O. The workers are waiting, not computing, so a CPU-target HPA may scale the fleet *down* mid-incident. Look at the destination.
+        - **CPU is pinned while the pipeline blocks.** The constraint is the pipeline's own processing cost. The stage cannot drain because it is compute-limited, and the autoscaler will ask for replicas it may not be allowed to have. Look at CPU per event, by component.
+
+        The second shape is the harder one to spot, because a fleet at its replica ceiling with CPU above the autoscaler's target looks, from the pipeline's own telemetry, exactly like a fleet that is correctly sized and busy.
+
+        ## Metric reading rules
+
+        Five that have each cost real investigation time:
+
+        **`pipelines.source_send_batch_latency_seconds` and `pipelines.buffer_send_duration_seconds` are distributions, not gauges.** `avg:` gives the mean and describes condition. `max:` reaches inside each host's own sketch and returns the single worst sample, so a flat `max:` line is compatible with a p50 in microseconds. Use the mean to judge the pipeline and the tail to judge whether data is being lost.
+
+        **`pipelines.component_cpu_usage_ns_total` is per component, not per worker.** Dividing it by the worker count understates worker utilisation by whatever the source, sink, TLS and buffer serialisation cost. For worker CPU use `pipelines.cpu_usage_seconds_total` over `pipelines.cpu_max_cores`.
+
+        **`buffer_send_duration_seconds` measures the write *into* a component, not its own work.** Where a processor group wraps a processor, the group's row is the queue the source blocks on and the inner processor's row is an internal handoff. Alert on the group.
+
+        **`pipelines.component_received_events_total` is not a reliable volume metric while a pipeline is shedding or cancelling.** It counts arrivals rather than unique events. Prefer `component_received_bytes_total` as a volume basis, and cross-check the two before quoting either.
+
+        **`rc_version` and `op_worker_version` are tags on every pipeline metric.** Grouping any OPW metric by `rc_version` turns it into change detection and answers "did someone change the config, and exactly when" without touching audit logs. `op_worker_version` separates a config change from a binary upgrade.

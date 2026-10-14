@@ -1,0 +1,19 @@
+{{#is_alert}}
+## What's happening?
+The worst single blocked send on OPW source `{{component_id.name}}` in pipeline `{{pipeline_name.name}}` reached **{{value}} seconds** in the last 5 minutes, past the configured client deadline. A batch that blocks longer than the OTel Collector's exporter `timeout` is cancelled by the client and lost in full, up to `send_batch_max_size` records, so this threshold is a data-loss signal rather than a latency one.
+{{/is_alert}}
+{{#is_recovery}}No source send exceeded the client deadline for `{{component_id.name}}` in pipeline `{{pipeline_name.name}}` in the last 5 minutes.{{/is_recovery}}
+
+## Why this exists alongside the mean-based monitor
+`pipelines.source_send_batch_latency_seconds` is a **distribution**, not a gauge. `avg:` gives the mean blocked time and describes the pipeline's condition. `max:` gives the worst single batch in each interval and describes whether data is being dropped. The two diverge sharply: a pipeline can hold a mean of under a millisecond while individual batches still cross the deadline in bursts, and in that state the mean-based monitor is silent while loss continues.
+
+Treat harm here as a step function, not a gradient. Everything under the client deadline costs nothing; everything over it costs a whole batch.
+
+## Impact
+[Assess impact](${notebook_assessing_impact_url})
+
+## What to do
+[Open the runbook](${notebook_opw_backpressure_triage_url})
+
+## Links
+- [Observability Pipelines dashboard](${op_dashboard_url})

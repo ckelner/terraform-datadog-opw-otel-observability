@@ -7,6 +7,14 @@ Writing one payload into the destination buffer for `{{component_id.name}}` in p
 {{/is_warning}}
 {{#is_recovery}}Buffer write duration recovered for `{{component_id.name}}` in pipeline `{{pipeline_name.name}}`.{{/is_recovery}}
 
+## Which component_id matters
+This metric is "duration spent sending a payload to this buffer", so each series is the time spent writing *into* the named component, not the time that component spends working. On a topology where a processor group wraps one or more processors, those are different boundaries:
+
+- The **group** is addressed as a topology node: the source writes into it and the destination reads from it. Its value is the queue the source actually blocks on, and it will match the source's blocked time closely.
+- A **processor inside the group** is fed by the group's own dispatcher, one batch at a time, so it almost never waits. A reading in single-digit milliseconds there is normal and is not evidence that the stage is healthy.
+
+Alert on the group. During a sustained stall the inner processor can read in milliseconds while the group reads in seconds, so the inner row alone will tell you nothing is wrong.
+
 ## Impact
 [Assess impact](${notebook_assessing_impact_url})
 

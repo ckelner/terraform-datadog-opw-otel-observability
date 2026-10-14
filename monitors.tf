@@ -1,13 +1,25 @@
 locals {
   monitor_source = jsondecode(templatefile("${path.module}/assets/monitors.json.tftpl", {
-    pipeline_scope        = local.pipeline_scope
-    worker_scope          = local.worker_scope
-    exporter_scope        = local.exporter_scope
-    collector_group       = local.collector_group
-    memory_limiter_metric = var.memory_limiter_refused_metric
-    collector_log_query   = var.collector_log_query
+    pipeline_scope         = local.pipeline_scope
+    worker_scope           = local.worker_scope
+    exporter_scope         = local.exporter_scope
+    pipeline_group         = local.pipeline_group
+    pipeline_label         = local.pipeline_label
+    collector_group_suffix = local.collector_group_suffix
+    collector_group_name   = local.collector_group_name
+    collector_log_group    = local.collector_log_group
+    memory_limiter_metric  = var.memory_limiter_refused_metric
+    collector_log_query    = var.collector_log_query
+    hpa_metric_prefix      = local.hpa_metric_prefix
+    hpa_scope              = local.hpa_scope
+    hpa_group              = local.hpa_group
+    source_block_tail_crit = var.source_block_tail_critical_seconds
+    worker_cpu_crit        = var.worker_cpu_critical_ratio
   }))
-  monitor_items = { for item in local.monitor_source.monitors : item.asset_id => item }
+  monitor_items = {
+    for item in local.monitor_source.monitors : item.asset_id => item
+    if item.asset_id != "monitor.k8s-hpa-at-ceiling" || local.hpa_enabled
+  }
 
   # A monitor can only route by environment when `pipeline_name` is in its group-by,
   # because that is what makes {{pipeline_name.name}} resolvable in the message. OPW
@@ -48,7 +60,8 @@ locals {
       app_url          = local.app_url
       op_dashboard_url = local.op_dashboard_url
       byoc_exporter    = var.byoc_exporter_filter
-      collector_group  = local.collector_group
+      collector_group  = var.collector_group_by_tag == null ? "" : var.collector_group_by_tag
+      hpa_group        = local.hpa_group
     },
     { for id, value in local.notebook_ids : "${replace(replace(id, ".", "_"), "-", "_")}_url" => "${local.app_url}/notebook/${value}" },
     { for id, query in local.monitor_search_queries : "${replace(replace(id, ".", "_"), "-", "_")}_search_query" => query }

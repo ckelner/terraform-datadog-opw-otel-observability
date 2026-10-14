@@ -1,0 +1,23 @@
+{{#is_alert}}
+## What's happening?
+OPW worker `{{host.name}}` in pipeline `{{pipeline_name.name}}` averaged **{{value}}** of its CPU allocation over the last 15 minutes. The worker is CPU-bound, which on a processor-heavy pipeline means the processing stage can no longer drain its input buffer and the source will begin to block.
+{{/is_alert}}
+{{#is_recovery}}Worker CPU recovered on `{{host.name}}` in pipeline `{{pipeline_name.name}}`.{{/is_recovery}}
+
+## Reading this correctly
+The ratio is `pipelines.cpu_usage_seconds_total` over `pipelines.cpu_max_cores`, which is OPW's own view of its own cgroup. CPU-seconds per second is cores, so the rate needs no unit conversion.
+
+Do not confuse this with `pipelines.component_cpu_usage_ns_total`, which is per **component**. A single transform can account for most of a worker's CPU while the remainder goes to the source, the sink, TLS and buffer serialisation. Dividing the component figure by the worker count understates worker utilisation by that remainder, which is not negligible.
+
+## Impact
+[Assess impact](${notebook_assessing_impact_url})
+
+## What to do
+1. Check whether the autoscaler has room. If desired replicas have reached the maximum, adding capacity is blocked and CPU will stay pinned regardless of load. That is the condition the autoscaler-ceiling monitor watches.
+2. Check CPU per event rather than CPU alone: `component_cpu_usage_ns_total` divided by `component_received_events_total`, grouped by component. A single expensive transform is a far more common cause than genuine volume growth.
+3. Only then consider raising replica counts. Sizing from throughput in bytes per day assumes a processing cost per event; a processor-heavy pipeline can miss that assumption by several times over.
+
+[Open the runbook](${notebook_opw_backpressure_triage_url})
+
+## Links
+- [Observability Pipelines dashboard](${op_dashboard_url})

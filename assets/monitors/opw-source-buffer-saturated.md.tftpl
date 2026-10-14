@@ -7,6 +7,11 @@ The source buffer on `{{component_id.name}}` in pipeline `{{pipeline_name.name}}
 {{/is_warning}}
 {{#is_recovery}}The source buffer recovered for `{{component_id.name}}` in pipeline `{{pipeline_name.name}}`.{{/is_recovery}}
 
+## If this monitor is quiet during a backpressure incident
+A low ratio here is not an all-clear. The source channel being nearly empty while source blocked time is high means the constraint is **downstream of the channel**, not the channel itself. The source is not waiting for room in its own buffer; it is waiting for the next stage to accept work.
+
+A ratio well under this threshold alongside multi-second blocked time is the signature of a processing stage that cannot drain, and the next place to look is `pipelines.buffer_send_duration_seconds` grouped by component, not this metric.
+
 ## Impact
 [Assess impact](${notebook_assessing_impact_url})
 

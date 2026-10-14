@@ -22,7 +22,7 @@ variable "datadog_custom_host" {
 }
 
 variable "pipeline_name_filter" {
-  description = "Tag-glob matched against the OPW `pipeline_name` tag to scope every pipeline monitor. Monitors group by pipeline_id, so individual pipeline IDs are never needed. Use `*` to cover every pipeline in the organization."
+  description = "Tag-glob matched against the OPW `pipeline_name` tag to scope every pipeline monitor. `*` (the default) emits NO pipeline_name term at all, rather than `pipeline_name:*`, because `tag:*` matches only series that actually carry the tag and silently returns nothing when they do not. Monitors group by pipeline_id, so individual pipeline IDs are never needed."
   type        = string
   default     = "*"
   nullable    = false
@@ -60,9 +60,9 @@ variable "paging_pipeline_name_exclude" {
 }
 
 variable "byoc_exporter_filter" {
-  description = "Tag-glob matched against the OpenTelemetry Collector `exporter` attribute, scoping the exporter-tier monitors to the pipeline that ships to BYOC. Collectors that also ship elsewhere (for example to Splunk) are excluded by this filter; see README for which signals cannot be scoped this way."
+  description = "Exact value of the OpenTelemetry Collector `exporter` attribute for the pipeline shipping to BYOC, scoping the exporter-tier monitors. Defaults to `*` (every exporter) deliberately: a wrong exporter name matches nothing and the monitor is silently inert, whereas `*` is merely noisy and therefore visible. Find yours with `otelcol_exporter_queue_size{*} by {exporter}`."
   type        = string
-  default     = "otlphttp/datadog-byoc-logs"
+  default     = "*"
   nullable    = false
   validation {
     condition     = length(trimspace(var.byoc_exporter_filter)) > 0
@@ -71,13 +71,12 @@ variable "byoc_exporter_filter" {
 }
 
 variable "collector_group_by_tag" {
-  description = "Tag used to group OpenTelemetry Collector monitors, identifying which workload a Collector belongs to. `k8s_namespace_name` suits per-namespace sidecar and DaemonSet deployments."
+  description = "Optional ADDITIONAL tag to group OpenTelemetry Collector monitors by, identifying which workload a Collector belongs to. Collector monitors always group by a tag intrinsic to the metric (receiver, processor or exporter), so they work without this. Set it only to a tag your Collector telemetry actually carries: grouping by an absent tag yields a single N/A series. `null` (the default) adds no extra grouping."
   type        = string
-  default     = "k8s_namespace_name"
-  nullable    = false
+  default     = null
   validation {
-    condition     = can(regex("^[a-z][a-z0-9_.-]*$", var.collector_group_by_tag))
-    error_message = "collector_group_by_tag must be a lowercase Datadog tag key."
+    condition     = var.collector_group_by_tag == null ? true : can(regex("^[a-z][a-z0-9_.-]*$", var.collector_group_by_tag))
+    error_message = "collector_group_by_tag must be a lowercase Datadog tag key, or null."
   }
 }
 
@@ -147,5 +146,66 @@ variable "mute_message" {
   validation {
     condition     = length(trimspace(var.mute_message)) > 0
     error_message = "mute_message must not be empty."
+  }
+}
+
+variable "hpa_monitor_source" {
+  description = <<-EOT
+    Metric source for the autoscaler-ceiling monitor, which alerts when the HPA's desired
+    replica count has reached its maximum. The OPW fleet sitting at maxReplicas while CPU
+    is above target is the condition that precedes backpressure, and no OPW or Collector
+    metric can see it.
+
+    "none" omits the monitor. "datadog_agent" uses kubernetes_state.hpa.*, which requires
+    the Agent's kubernetes_state_core check. "otel_k8s_cluster" uses k8s.hpa.*, emitted by
+    the OpenTelemetry k8sclusterreceiver. Default is "none" because neither source is
+    required by the rest of this module.
+  EOT
+  type        = string
+  default     = "none"
+  nullable    = false
+  validation {
+    condition     = contains(["none", "datadog_agent", "otel_k8s_cluster"], var.hpa_monitor_source)
+    error_message = "hpa_monitor_source must be one of: none, datadog_agent, otel_k8s_cluster."
+  }
+}
+
+variable "hpa_scope" {
+  description = "Tag filter selecting the OPW HorizontalPodAutoscaler, e.g. \"kube_namespace:observability-pipelines\". Applied only when hpa_monitor_source is not \"none\". A value of \"*\" emits no term, matching every HPA the source reports."
+  type        = string
+  default     = "*"
+  nullable    = false
+}
+
+variable "source_block_tail_critical_seconds" {
+  description = <<-EOT
+    Critical threshold, in seconds, for the worst single blocked send on an OPW source.
+    Set this to the OTel Collector's exporter `timeout`, because a batch that blocks
+    longer than the client's deadline is cancelled and lost in full, up to
+    send_batch_max_size records.
+
+    This is deliberately separate from the mean-based source-blocked monitor. The mean
+    describes the pipeline's condition; the tail describes whether data is being dropped.
+    A pipeline can have a healthy mean and still lose batches in bursts.
+
+    Defaults to 30, the `otlphttp` exporter's own default. Override it if yours differs.
+  EOT
+  type        = number
+  default     = 30
+  nullable    = false
+  validation {
+    condition     = var.source_block_tail_critical_seconds > 0
+    error_message = "source_block_tail_critical_seconds must be greater than 0."
+  }
+}
+
+variable "worker_cpu_critical_ratio" {
+  description = "Critical threshold for OPW worker CPU, as a fraction of the worker's own cgroup allocation (pipelines.cpu_usage_seconds_total over pipelines.cpu_max_cores). Set above the HPA's targetCPUUtilizationPercentage so the monitor fires only once autoscaling has failed to relieve the load."
+  type        = number
+  default     = 0.85
+  nullable    = false
+  validation {
+    condition     = var.worker_cpu_critical_ratio > 0 && var.worker_cpu_critical_ratio <= 1
+    error_message = "worker_cpu_critical_ratio must be greater than 0 and at most 1."
   }
 }

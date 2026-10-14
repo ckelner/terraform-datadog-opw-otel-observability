@@ -63,10 +63,15 @@ module "opw_otel_observability" {
   paging_pipeline_name_exclude = ["pre-prod", "preprod", "non-prod", "nonprod", "pre-prd", "non-prd"]
 
   # Scopes the exporter-tier Collector monitors to the pipeline shipping to BYOC.
-  # Receiver and memory_limiter signals cannot be scoped this way; see README.
-  byoc_exporter_filter = "otlphttp/datadog-byoc-logs"
+  # Find the real value first: otelcol_exporter_queue_size{*} by {exporter}.
+  # A wrong name matches nothing and the monitor is silently inert, which is why
+  # the default is "*" rather than a guess.
+  byoc_exporter_filter = "*"
 
-  collector_group_by_tag = "k8s_namespace_name"
+  # Optional extra grouping. Collector monitors already group by a tag intrinsic
+  # to the metric, so leave this null unless your telemetry really carries the
+  # tag. Grouping by an absent tag collapses everything into one N/A series.
+  collector_group_by_tag = null
 
   # Collector v0.155.0 and later use otelcol_processor_memory_limiter_refused_log_records.
   memory_limiter_refused_metric = "otelcol_processor_refused_log_records"

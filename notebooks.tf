@@ -17,7 +17,7 @@ module "notebook_otelcol_refusing_data" {
   links = {
     app_url                       = local.app_url
     byoc_exporter                 = var.byoc_exporter_filter
-    collector_group               = local.collector_group
+    collector_group               = coalesce(var.collector_group_by_tag, "exporter")
     memory_limiter_metric         = var.memory_limiter_refused_metric
     notebook_assessing_impact_url = module.notebook_assessing_impact.url
     optional_monitor_otelcol_data = local.monitor_search_links["otelcol_refusing_data"]
@@ -53,7 +53,7 @@ module "notebook_opw_backpressure_triage" {
   links = {
     app_url                                     = local.app_url
     op_dashboard_url                            = local.op_dashboard_url
-    collector_group                             = local.collector_group
+    collector_group                             = coalesce(var.collector_group_by_tag, "exporter")
     byoc_exporter                               = var.byoc_exporter_filter
     notebook_assessing_impact_url               = module.notebook_assessing_impact.url
     notebook_otelcol_refusing_data_url          = module.notebook_otelcol_refusing_data.url

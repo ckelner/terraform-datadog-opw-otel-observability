@@ -7,6 +7,11 @@ The OPW source `{{component_id.name}}` in pipeline `{{pipeline_name.name}}` spen
 {{/is_warning}}
 {{#is_recovery}}Source send latency recovered for `{{component_id.name}}` in pipeline `{{pipeline_name.name}}`.{{/is_recovery}}
 
+## Reading this correctly
+`pipelines.source_send_batch_latency_seconds` is a **distribution**. This monitor uses `avg:`, so it reports the mean blocked time and describes the pipeline's condition. It does not tell you whether data is being lost: individual batches can cross the client's exporter deadline and be cancelled while the mean stays well below this threshold. The companion monitor on the tail covers that case.
+
+Expect this monitor to be in continuous alarm, not flapping, if the pipeline has entered a sustained backpressure plateau. Blocked time stabilises once the source's residence time stretches far enough that throughput matches the drain rate, so a flat multi-second value is the normal shape of this failure rather than a sign of measurement error.
+
 ## Impact
 [Assess impact](${notebook_assessing_impact_url})
 

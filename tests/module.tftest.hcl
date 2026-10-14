@@ -117,7 +117,7 @@ run "complete_bundle_without_notifications" {
   command = apply
 
   assert {
-    condition     = length(output.monitor_ids) == 16
+    condition     = length(output.monitor_ids) == 18
     error_message = "The module must manage exactly 16 monitors."
   }
 
@@ -127,8 +127,8 @@ run "complete_bundle_without_notifications" {
   }
 
   assert {
-    condition     = length([for id in keys(output.monitor_ids) : id if startswith(id, "monitor.opw-")]) == 9
-    error_message = "Nine monitors must cover the Observability Pipelines Worker tier."
+    condition     = length([for id in keys(output.monitor_ids) : id if startswith(id, "monitor.opw-")]) == 11
+    error_message = "Eleven monitors must cover the Observability Pipelines Worker tier."
   }
 
   assert {
@@ -299,7 +299,7 @@ run "complete_bundle_without_notifications" {
   # Datadog's own template braces must survive Terraform templating untouched.
   assert {
     condition     = strcontains(jsondecode(datadog_monitor_json.this["monitor.opw-source-lag-high"].monitor).name, "{{pipeline_name.name}}")
-    error_message = "Datadog template variables in monitor names must pass through Terraform templating intact."
+    error_message = "With paging gated, the title must label by pipeline_name and the Datadog braces must survive Terraform templating."
   }
 
   assert {
@@ -375,7 +375,7 @@ run "unmuted_when_disabled" {
 
   # Unmuting must not disturb the monitors themselves.
   assert {
-    condition     = length(output.monitor_ids) == 16
+    condition     = length(output.monitor_ids) == 18
     error_message = "Unmuting must leave all 16 monitors in place."
   }
 }
@@ -740,5 +740,216 @@ run "paging_case_variants_are_expanded" {
       if startswith(id, "monitor.opw-") && jsondecode(resource.monitor).priority == 1
     ])
     error_message = "Expanded case variants must appear in the rendered monitor message."
+  }
+}
+
+run "no_tag_existence_dependent_filters" {
+  command = apply
+
+  # `tag:*` matches only series that carry the tag, so a monitor scoped that way
+  # against telemetry lacking the tag returns no data and sits in OK forever.
+  # With the default filters, no query may contain one.
+  assert {
+    condition = alltrue([
+      for id, resource in datadog_monitor_json.this :
+      !strcontains(jsondecode(resource.monitor).query, "pipeline_name:*") &&
+      !strcontains(jsondecode(resource.monitor).query, "exporter:*")
+    ])
+    error_message = "A filter of * must emit no tag term at all, never tag:*, which silently matches nothing when the tag is absent."
+  }
+
+  # Collector monitors must group by a tag intrinsic to the metric, so they work
+  # without the caller supplying one.
+  assert {
+    condition = alltrue([
+      for id, resource in datadog_monitor_json.this :
+      can(regex("by \\{(receiver|processor|exporter|host)", jsondecode(resource.monitor).query))
+      if startswith(id, "monitor.otelcol-") && jsondecode(resource.monitor).type == "query alert"
+    ])
+    error_message = "Collector monitors must group by a metric-intrinsic tag, not one the deployment may not emit."
+  }
+
+  # Ungated, pipeline_name must not appear in any group-by.
+  assert {
+    condition     = strcontains(jsondecode(datadog_monitor_json.this["monitor.opw-source-lag-high"].monitor).query, "by {pipeline_id,pipeline_name,")
+    error_message = "With paging gated, pipeline_name must be in the group-by so the is_match gate can resolve it."
+  }
+}
+
+run "ungated_drops_pipeline_name_grouping" {
+  command = apply
+
+  variables {
+    paging_pipeline_name_include = []
+    paging_pipeline_name_exclude = []
+  }
+
+  # Without env gating there is no reason to group by a tag the deployment may
+  # not carry, so it must be dropped entirely.
+  assert {
+    condition = alltrue([
+      for id, resource in datadog_monitor_json.this :
+      !strcontains(jsondecode(resource.monitor).query, "pipeline_name")
+    ])
+    error_message = "With paging ungated, no query may group by pipeline_name."
+  }
+
+  assert {
+    condition     = strcontains(jsondecode(datadog_monitor_json.this["monitor.opw-source-lag-high"].monitor).name, "{{pipeline_id.name}}")
+    error_message = "With paging ungated, titles must label by pipeline_id, which is always present."
+  }
+}
+
+# The autoscaler monitor is opt-in: neither metric source is a dependency of the
+# rest of the module, so by default it must not exist at all.
+run "hpa_monitor_absent_by_default" {
+  command = apply
+
+  assert {
+    condition     = !contains(keys(datadog_monitor_json.this), "monitor.k8s-hpa-at-ceiling")
+    error_message = "With hpa_monitor_source = none the autoscaler monitor must not be created."
+  }
+}
+
+run "hpa_monitor_uses_datadog_agent_metrics" {
+  command = apply
+
+  variables {
+    hpa_monitor_source = "datadog_agent"
+    hpa_scope          = "kube_namespace:observability-pipelines"
+  }
+
+  assert {
+    condition     = contains(keys(datadog_monitor_json.this), "monitor.k8s-hpa-at-ceiling")
+    error_message = "Naming a source must create the autoscaler monitor."
+  }
+
+  assert {
+    condition = alltrue([
+      strcontains(jsondecode(datadog_monitor_json.this["monitor.k8s-hpa-at-ceiling"].monitor).query, "kubernetes_state.hpa.desired_replicas"),
+      strcontains(jsondecode(datadog_monitor_json.this["monitor.k8s-hpa-at-ceiling"].monitor).query, "kubernetes_state.hpa.max_replicas"),
+      strcontains(jsondecode(datadog_monitor_json.this["monitor.k8s-hpa-at-ceiling"].monitor).query, "by {hpa}"),
+    ])
+    error_message = "The datadog_agent source must query kubernetes_state.hpa.* grouped by hpa."
+  }
+}
+
+# The OpenTelemetry k8sclusterreceiver reports the same four gauges under k8s.hpa.*
+# and maps the k8s.hpa.name resource attribute onto kube_hpa.
+run "hpa_monitor_uses_otel_metrics" {
+  command = apply
+
+  variables {
+    hpa_monitor_source = "otel_k8s_cluster"
+  }
+
+  assert {
+    condition = alltrue([
+      strcontains(jsondecode(datadog_monitor_json.this["monitor.k8s-hpa-at-ceiling"].monitor).query, "k8s.hpa.desired_replicas"),
+      !strcontains(jsondecode(datadog_monitor_json.this["monitor.k8s-hpa-at-ceiling"].monitor).query, "kubernetes_state"),
+      strcontains(jsondecode(datadog_monitor_json.this["monitor.k8s-hpa-at-ceiling"].monitor).query, "by {kube_hpa}"),
+    ])
+    error_message = "The otel_k8s_cluster source must query k8s.hpa.* grouped by kube_hpa."
+  }
+
+  # Same rule as every other scope in this module: "*" emits no tag term.
+  assert {
+    condition     = !strcontains(jsondecode(datadog_monitor_json.this["monitor.k8s-hpa-at-ceiling"].monitor).query, "hpa_scope")
+    error_message = "The HPA scope template value must be interpolated, not emitted literally."
+  }
+}
+
+# The mean and the tail answer different questions on a distribution metric. The
+# pair must not collapse into two monitors with the same aggregation.
+run "source_block_monitors_use_different_aggregations" {
+  command = apply
+
+  variables {
+    source_block_tail_critical_seconds = 25
+  }
+
+  assert {
+    condition     = strcontains(jsondecode(datadog_monitor_json.this["monitor.opw-source-send-latency-high"].monitor).query, "avg:pipelines.source_send_batch_latency_seconds")
+    error_message = "The condition monitor must read the mean of the distribution."
+  }
+
+  assert {
+    condition     = strcontains(jsondecode(datadog_monitor_json.this["monitor.opw-source-send-latency-tail"].monitor).query, "max:pipelines.source_send_batch_latency_seconds")
+    error_message = "The data-loss monitor must read the tail of the distribution, not the mean."
+  }
+
+  # The tail threshold is the client's exporter deadline and must be the caller's
+  # value, not a hardcoded one.
+  assert {
+    condition     = strcontains(jsondecode(datadog_monitor_json.this["monitor.opw-source-send-latency-tail"].monitor).query, "> 25")
+    error_message = "The tail threshold must come from source_block_tail_critical_seconds."
+  }
+}
+
+# Worker CPU must come from OPW's own cgroup view, never from the per-component
+# counter, which understates it by the cost of the source, sink and TLS.
+run "worker_cpu_monitor_uses_worker_scope_metrics" {
+  command = apply
+
+  variables {
+    worker_cpu_critical_ratio = 0.85
+  }
+
+  assert {
+    condition = alltrue([
+      strcontains(jsondecode(datadog_monitor_json.this["monitor.opw-worker-cpu-saturated"].monitor).query, "pipelines.cpu_usage_seconds_total"),
+      strcontains(jsondecode(datadog_monitor_json.this["monitor.opw-worker-cpu-saturated"].monitor).query, "pipelines.cpu_max_cores"),
+      !strcontains(jsondecode(datadog_monitor_json.this["monitor.opw-worker-cpu-saturated"].monitor).query, "component_cpu_usage_ns_total"),
+    ])
+    error_message = "Worker CPU must be cpu_usage_seconds_total over cpu_max_cores, not the per-component counter."
+  }
+
+  # A counter divided by a gauge needs .as_rate() to be cores.
+  assert {
+    condition     = strcontains(jsondecode(datadog_monitor_json.this["monitor.opw-worker-cpu-saturated"].monitor).query, ".as_rate()")
+    error_message = "cpu_usage_seconds_total is a counter and must carry .as_rate() to read as cores."
+  }
+}
+
+run "reject_tail_threshold_of_zero" {
+  command = plan
+
+  variables {
+    source_block_tail_critical_seconds = 0
+  }
+
+  expect_failures = [var.source_block_tail_critical_seconds]
+}
+
+run "reject_cpu_ratio_above_one" {
+  command = plan
+
+  variables {
+    worker_cpu_critical_ratio = 1.5
+  }
+
+  expect_failures = [var.worker_cpu_critical_ratio]
+}
+
+run "reject_unknown_hpa_source" {
+  command = plan
+
+  variables {
+    hpa_monitor_source = "prometheus"
+  }
+
+  expect_failures = [var.hpa_monitor_source]
+}
+
+run "enabling_hpa_source_adds_exactly_one_monitor" {
+  command = apply
+
+  variables {
+    hpa_monitor_source = "otel_k8s_cluster"
+  }
+
+  assert {
+    condition     = length(output.monitor_ids) == 19
+    error_message = "Naming an HPA source must add exactly one monitor to the default set of 18."
   }
 }
