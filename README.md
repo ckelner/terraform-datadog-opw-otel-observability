@@ -2,18 +2,18 @@
 
 Datadog monitors and runbook notebooks for OpenTelemetry Collector to Observability Pipelines to BYOC log path, focused on backpressure and data loss.
 
-> ## Unofficial
->
-> At this time it is a personal project with a sole author, Chris Kelner (Datadog Employee).
->
-> - Treat it as a starting point you own.
-> - The thresholds will not be right for you. They are derived from a handful of comparable incidents. None of them were calibrated against your specific traffic. Expect to tune them.
-> - The notebooks are opinionated. The triage order and the diagnostic charts reflect one reading of how these failure mode propagates. Yours may differ.
-> - Provided as-is under Apache-2.0, with no warranty and no conditions of any kind. See [LICENSE](LICENSE).
->
-> Because of the above, `start_monitors_muted` defaults to `true`. Run it muted, watch the signals against your own traffic, tune, and only then turn alerting on.
->
-> The officially maintained BYOC module is [`terraform-datadog-byoc-observability`](https://github.com/DataDog/terraform-datadog-byoc-observability), and is not yet made public. Where the two overlap, prefer theirs. This module is built not to overlap it. When working with Datadog they may supply you with this private repository at your request until is is made public.
+## Unofficial
+
+At this time it is a personal project with a sole author, Chris Kelner (Datadog Employee).
+
+- Treat it as a starting point you own.
+- The thresholds will not be right for you. They are derived from a handful of comparable incidents. None of them were calibrated against your specific traffic. Expect to tune them.
+- The notebooks are opinionated. The triage order and the diagnostic charts reflect one reading of how these failure mode propagates. Yours may differ.
+- Provided as-is under Apache-2.0, with no warranty and no conditions of any kind. See [LICENSE](LICENSE).
+
+Because of the above, `start_monitors_muted` defaults to `true`. Run it muted, watch the signals against your own traffic, tune, and only then turn alerting on.
+
+The officially maintained BYOC module is [`terraform-datadog-byoc-observability`](https://github.com/DataDog/terraform-datadog-byoc-observability), and is not yet made public. Where the two overlap, prefer theirs. This module is built not to overlap it. When working with Datadog they may supply you with this private repository at your request until is is made public.
 
 This module is a sibling of [`terraform-datadog-byoc-observability`](https://github.com/DataDog/terraform-datadog-byoc-observability) and is designed to be deployed alongside it, not instead of it. It deliberately ships none of the six core OPW monitors that module already owns.
 
